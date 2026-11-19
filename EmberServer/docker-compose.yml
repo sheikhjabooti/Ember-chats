@@ -1,0 +1,24 @@
+services:
+  ember-server:
+    build: .
+    ports:
+      - "4000:4000"
+    environment:
+      - PORT=4000
+      - DATABASE_FILE=/data/ember.db
+      - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in your .env before running}
+      - JWT_EXPIRES_IN=30d
+      - BREAKOUT_WARNING_WINDOW_SECONDS=15
+      - BREAKOUT_DEFAULT_INACTIVITY_SECONDS=1800
+      - CORS_ORIGIN=${CORS_ORIGIN:-*}
+    volumes:
+      - ember_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4000/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  ember_data:
