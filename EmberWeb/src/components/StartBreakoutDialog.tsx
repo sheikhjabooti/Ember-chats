@@ -1,0 +1,76 @@
+import { useState } from "react";
+import { initials } from "../format";
+import { Dialog } from "./Dialog";
+
+export function StartBreakoutDialog({
+  candidates,
+  nameOf,
+  onClose,
+  onStart,
+}: {
+  candidates: string[];
+  nameOf: (id: string) => string;
+  onClose: () => void;
+  onStart: (ids: string[]) => Promise<void>;
+}) {
+  // In a 1:1 chat there is only one possible person, so preselect them.
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(candidates.length === 1 ? candidates : []));
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const toggle = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  async function start() {
+    setBusy(true);
+    setError(null);
+    try {
+      await onStart([...selected]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start the breakout");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog title="Start a breakout" onClose={onClose}>
+      <div className="stack">
+        <p className="muted">
+          A side conversation with some people from this chat. Messages are never saved. It clears itself once
+          everyone has left, unless someone taps <strong>Keep</strong>.
+        </p>
+        <ul className="pick-list">
+          {candidates.map((id) => (
+            <li key={id}>
+              <label className={`pick ${selected.has(id) ? "on" : ""}`}>
+                <input type="checkbox" checked={selected.has(id)} onChange={() => toggle(id)} />
+                <span className="avatar small" aria-hidden>
+                  {initials(nameOf(id))}
+                </span>
+                <span>{nameOf(id)}</span>
+              </label>
+            </li>
+          ))}
+        </ul>
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="row-end">
+          <button className="ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="volatile-btn solid" disabled={busy || selected.size === 0} onClick={start}>
+            🔥 Start with {selected.size || "…"}
+          </button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}

@@ -11,3 +11,4 @@ npm-debug.log
 .swiftpm/
 xcuserdata/
 GoogleService-Info.plist
+.claude/
