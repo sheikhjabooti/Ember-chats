@@ -2,10 +2,7 @@ import Foundation
 
 /// Talks to the Ember Server backend (see the sibling `EmberServer`
 /// project) over REST for persisted chats and a WebSocket for real-time
-/// delivery. This is the default `ChatBackendServicing` implementation —
-/// `FirebaseChatService` remains available if you'd rather run on
-/// Firebase instead; both conform to the same protocol so swapping is a
-/// one-line change in `EmberApp.swift`.
+/// delivery. It's the app's only `ChatBackendServicing` implementation.
 public actor EmberBackendService: NSObject, ChatBackendServicing {
 
     private let baseURL: URL

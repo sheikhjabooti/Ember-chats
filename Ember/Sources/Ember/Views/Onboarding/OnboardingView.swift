@@ -61,8 +61,7 @@ public struct OnboardingView: View {
                     ? try await ember.register(email: identifier, password: password, displayName: displayName)
                     : try await ember.signIn(email: identifier, password: password)
             } else {
-                // FirebaseChatService or another ChatBackendServicing
-                // implementation: wire its own auth flow here.
+                // Another ChatBackendServicing implementation would wire its own auth flow here.
                 userID = await backend.currentUserID() ?? UUID().uuidString
             }
             onSignedIn(userID)

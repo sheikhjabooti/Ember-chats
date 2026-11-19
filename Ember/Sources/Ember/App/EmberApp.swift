@@ -4,8 +4,6 @@ import SwiftData
 @main
 struct EmberApp: App {
     let modelContainer = PersistenceController.makeContainer()
-    // Swap for `FirebaseChatService()` if you'd rather run on Firebase —
-    // both conform to `ChatBackendServicing`, so nothing else changes.
     let backend: ChatBackendServicing = EmberBackendService(baseURL: Config.serverBaseURL)
     let volatileStore = VolatileChatStore(warningWindow: Config.breakoutClearanceWarningWindow)
 
