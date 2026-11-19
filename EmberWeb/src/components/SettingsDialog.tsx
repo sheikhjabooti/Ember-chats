@@ -1,5 +1,6 @@
 import { FormEvent, useState } from "react";
 import { api } from "../api";
+import { notificationsAllowed, notificationsSupported, notificationsWanted, setNotificationsWanted } from "../notify";
 import type { Me } from "../types";
 import { Dialog } from "./Dialog";
 
@@ -19,6 +20,16 @@ export function SettingsDialog({
   const [tombstones, setTombstones] = useState(me.tombstoneLoggingEnabled);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [desktop, setDesktop] = useState(() => notificationsWanted() && notificationsAllowed());
+  const [desktopNote, setDesktopNote] = useState<string | null>(null);
+
+  async function toggleDesktop(on: boolean) {
+    const enabled = await setNotificationsWanted(on);
+    setDesktop(enabled);
+    setDesktopNote(
+      on && !enabled ? "Your browser blocked notifications for this site. Allow them in the site settings, then try again." : null
+    );
+  }
 
   async function save(e: FormEvent) {
     e.preventDefault();
@@ -62,6 +73,16 @@ export function SettingsDialog({
           Status
           <input value={statusMessage} maxLength={200} onChange={(e) => setStatusMessage(e.target.value)} />
         </label>
+        {notificationsSupported && (
+          <label className="toggle">
+            <input type="checkbox" checked={desktop} onChange={(e) => toggleDesktop(e.target.checked)} />
+            <span>
+              <strong>Desktop notifications</strong>
+              <span className="muted">New messages and breakout invites while Ember is in the background.</span>
+              {desktopNote && <span className="error">{desktopNote}</span>}
+            </span>
+          </label>
+        )}
         <label className="toggle">
           <input type="checkbox" checked={tombstones} onChange={(e) => setTombstones(e.target.checked)} />
           <span>

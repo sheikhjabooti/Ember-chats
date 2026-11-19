@@ -58,7 +58,8 @@ DELETE /chats/:id/messages/:m      delete your own message for everyone
 POST   /chats/:id/messages/:m/reactions  { emoji }         toggle your reaction
 POST   /chats/:id/read             { upToMessageId? }      mark read; others get a `read` event
 POST   /chats/:id/typing           { isTyping }
-POST   /chats/:id/breakout         { participantIds }      start a breakout (groups only)
+POST   /chats/:id/breakout         { participantIds, fromMessageId? }  start a breakout (groups only);
+                                   with fromMessageId it opens quoting that message
 GET    /chats/:id/breakouts        { active: [...live breakouts you're in] }
 
 GET    /breakouts/kept             every kept breakout you were in (their own list, not in /chats)

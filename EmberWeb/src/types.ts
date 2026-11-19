@@ -52,6 +52,8 @@ export interface Breakout {
   createdAt: string;
   createdByUserId: string;
   expiresAt: string;
+  /** Set when started with "Reply in a breakout". */
+  quotedMessage: { id: string; senderId: string; text: string; sentAt: string } | null;
   keepVote: KeepVote | null;
 }
 

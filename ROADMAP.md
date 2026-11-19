@@ -38,6 +38,34 @@ Carried over to later:
 - [ ] Shorter lived tokens with refresh. Tokens still last 30 days, but
       "sign out everywhere" can now revoke them.
 
+## Quality of life
+
+Done:
+
+- [x] Drafts kept per chat (never for breakouts, which stay off disk)
+- [x] Clickable links
+- [x] Date dividers and a "New messages" line
+- [x] Jump-to-latest button with a count of new messages
+- [x] Click a reply's quote to jump to the original
+- [x] Unread count in the browser tab title
+- [x] Sidebar search
+- [x] Desktop notifications (opt in, while Ember is in the background)
+- [x] Reply in a breakout
+
+Ideas for later, all small:
+
+- [ ] Press Up in an empty box to edit your last message
+- [ ] Copy text in the message menu
+- [ ] A consistent colour per person for avatars and names
+- [ ] Light / dark / system switch in Settings
+- [ ] Mute and pin chats
+- [ ] Online dots and "last seen"
+- [ ] Show messages as sending, with Retry if it fails
+- [ ] Search inside a chat
+- [ ] Show who is in a breakout right now
+- [ ] Show the time left before a quiet breakout starts clearing
+- [ ] Rename or leave a kept breakout
+
 ## Stage 2: Put it online and on phones
 
 - [ ] One `docker compose up` that runs the server and serves the built

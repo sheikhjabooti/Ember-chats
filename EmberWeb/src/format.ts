@@ -26,3 +26,15 @@ export function initials(name: string): string {
 export function sortChats(chats: Chat[]): Chat[] {
   return [...chats].sort((a, b) => (b.lastMessageAt ?? b.createdAt).localeCompare(a.lastMessageAt ?? a.createdAt));
 }
+
+/** "Today", "Yesterday", "Monday 18 Nov", or "18 Nov 2025" for other years. */
+export function dayLabel(iso: string): string {
+  const d = new Date(iso);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return "Today";
+  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+  const sameYear = d.getFullYear() === today.getFullYear();
+  return d.toLocaleDateString([], sameYear ? { weekday: "long", day: "numeric", month: "short" } : { day: "numeric", month: "short", year: "numeric" });
+}

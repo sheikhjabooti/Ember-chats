@@ -255,7 +255,17 @@ export function BreakoutPane(props: {
           nameOf={people.nameOf}
           volatile
           showSenders={(breakout?.participantIds.length ?? 0) > 2}
-          header={messages.length === 0 && <p className="muted center pad">Nothing said yet. Only the people here can see this.</p>}
+          header={
+            <>
+              {breakout?.quotedMessage && (
+                <blockquote className="breakout-quote in-chat">
+                  <span className="muted small">Started from {people.nameOf(breakout.quotedMessage.senderId)}'s message</span>
+                  <span>{breakout.quotedMessage.text}</span>
+                </blockquote>
+              )}
+              {messages.length === 0 && <p className="muted center pad">Nothing said yet. Only the people here can see this.</p>}
+            </>
+          }
         />
       )}
 

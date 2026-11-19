@@ -1072,3 +1072,136 @@ h3 {
   margin-left: auto;
   color: var(--accent);
 }
+
+/* --- QoL batch: dividers, jump button, links, search, quotes ---------------- */
+
+.messages-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.jump-bottom {
+  position: absolute;
+  right: 18px;
+  bottom: 12px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  font-weight: 700;
+}
+.jump-bottom.has-new {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: transparent;
+}
+
+.day-divider,
+.unread-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.day-divider::before,
+.day-divider::after,
+.unread-divider::before,
+.unread-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.unread-divider {
+  color: var(--danger);
+}
+.unread-divider::before,
+.unread-divider::after {
+  background: color-mix(in srgb, var(--danger) 45%, transparent);
+}
+
+.msg.flash .bubble {
+  animation: flash 1.6s ease-out;
+}
+@keyframes flash {
+  0%,
+  30% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 3px transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .msg.flash .bubble {
+    animation: none;
+    outline: 2px solid var(--accent);
+  }
+}
+
+button.quote {
+  text-align: left;
+  color: inherit;
+  width: 100%;
+  cursor: pointer;
+  border-radius: 4px;
+}
+button.quote:hover {
+  opacity: 1;
+}
+
+.bubble a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+.msg.theirs .bubble a {
+  color: var(--accent);
+}
+
+.sidebar-search {
+  padding: 0 14px 8px;
+}
+.sidebar-search input {
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border-color: transparent;
+}
+.draft-label {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.breakout-quote {
+  margin: 0;
+  display: grid;
+  gap: 2px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--ember);
+  background: var(--ember-soft);
+  border-radius: 0 10px 10px 0;
+  font-size: 14px;
+}
+.breakout-quote span:last-child {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.breakout-quote.in-chat {
+  margin-bottom: 12px;
+  align-self: stretch;
+}
+
+.toggle .error {
+  font-size: 13px;
+}

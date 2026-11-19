@@ -3,6 +3,7 @@ import { api } from "../api";
 import type { Session } from "../App";
 import { chatTitle, sortChats } from "../format";
 import { useEnsurePeople, usePeople } from "../people";
+import { appInBackground, notify } from "../notify";
 import { EmberSocket, SocketStatus } from "../socket";
 import type { Breakout, Chat, Me, Message, ServerFrame } from "../types";
 import { BreakoutPane } from "./BreakoutPane";
@@ -100,6 +101,8 @@ export function Workspace({
   const viewedChatId = view?.type === "chat" ? view.chatId : null;
   const viewedRef = useRef(viewedChatId);
   viewedRef.current = viewedChatId;
+  // Names and titles for notifications, read from inside the socket handler.
+  const labels = useRef({ nameOf: people.nameOf, titleOf: (_id: string): string | undefined => undefined });
 
   useEffect(() => {
     const updateChat = (id: string, fn: (c: Chat) => Chat) => {
@@ -128,6 +131,13 @@ export function Workspace({
           updateChat(chatId, (c) => ({ ...c, lastMessagePreview: previewOf(message), lastMessageAt: message.sentAt }));
           if (chatId !== viewedRef.current && message.senderId !== me.id) {
             setUnread((prev) => ({ ...prev, [chatId]: (prev[chatId] ?? 0) + 1 }));
+          }
+          if (message.senderId !== me.id && message.kind !== "system" && (appInBackground() || chatId !== viewedRef.current)) {
+            const sender = labels.current.nameOf(message.senderId);
+            const where = labels.current.titleOf(chatId);
+            notify(where && where !== sender ? `${sender} in ${where}` : sender, message.text ?? "", `chat:${chatId}`, () => {
+              setView({ type: "chat", chatId });
+            });
           }
           break;
         }
@@ -166,7 +176,17 @@ export function Workspace({
             const list = prev[b.parentChatId] ?? [];
             return list.some((x) => x.id === b.id) ? prev : { ...prev, [b.parentChatId]: [...list, b] };
           });
-          if (b.createdByUserId !== me.id) setInvites((prev) => new Set(prev).add(b.id));
+          if (b.createdByUserId !== me.id) {
+            setInvites((prev) => new Set(prev).add(b.id));
+            const from = labels.current.nameOf(b.createdByUserId);
+            const where = labels.current.titleOf(b.parentChatId) ?? "a group";
+            notify(
+              `${from} invited you to a breakout`,
+              b.quotedMessage ? `In ${where}, about: "${b.quotedMessage.text}"` : `In ${where}. Only the people invited can see it.`,
+              `breakout:${b.id}`,
+              () => setView({ type: "breakout", breakoutId: b.id, parentChatId: b.parentChatId })
+            );
+          }
           if (!knownChatIds.current.has(b.parentChatId)) loadChats();
           break;
         }
@@ -207,6 +227,17 @@ export function Workspace({
     const c = id ? findChat(id) : undefined;
     return c ? nameFor(c) : undefined;
   };
+
+  labels.current = { nameOf: people.nameOf, titleOf };
+
+  // Unread count in the browser tab, so new messages show from other tabs.
+  const totalUnread = Object.values(unread).reduce((n, c) => n + c, 0) + invites.size;
+  useEffect(() => {
+    document.title = totalUnread > 0 ? `(${totalUnread > 99 ? "99+" : totalUnread}) Ember` : "Ember";
+    return () => {
+      document.title = "Ember";
+    };
+  }, [totalUnread]);
 
   const currentChat = view?.type === "chat" ? findChat(view.chatId) : undefined;
   const currentBreakout = view?.type === "breakout" ? active[view.parentChatId]?.find((b) => b.id === view.breakoutId) : undefined;

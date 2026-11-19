@@ -108,8 +108,8 @@ export const api = {
 
   activeBreakouts: (chatId: string) => request<{ active: Breakout[] }>("GET", `/chats/${chatId}/breakouts`),
   keptBreakouts: () => request<Chat[]>("GET", "/breakouts/kept"),
-  startBreakout: (chatId: string, participantIds: string[]) =>
-    request<Breakout>("POST", `/chats/${chatId}/breakout`, { participantIds }),
+  startBreakout: (chatId: string, participantIds: string[], fromMessageId?: string) =>
+    request<Breakout>("POST", `/chats/${chatId}/breakout`, { participantIds, fromMessageId }),
   keepBreakout: (id: string) =>
     request<{ id: string; status: "pending" | "kept"; secondsRemaining?: number }>("POST", `/breakouts/${id}/keep`, {}),
   respondToKeep: (id: string, allow: boolean) => request<void>("POST", `/breakouts/${id}/keep/respond`, { allow }),

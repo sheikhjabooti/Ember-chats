@@ -38,6 +38,11 @@ export function ChatPane(props: {
   const [showInfo, setShowInfo] = useState(false);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editing, setEditing] = useState<Message | null>(null);
+  /** The message a new breakout will quote ("Reply in a breakout"). */
+  const [breakoutFrom, setBreakoutFrom] = useState<Message | null>(null);
+  // Where you'd read up to when you opened this chat, for the "New messages" line.
+  // Captured once: reading the chat moves the real value forward straight away.
+  const [unreadAfter] = useState<string | null>(() => chat.readState?.[me.id] ?? null);
 
   const isGroup = chat.kind === "group";
   const isKeptBreakout = chat.kind === "breakout";
@@ -186,6 +191,12 @@ export function ChatPane(props: {
         setError(err instanceof Error ? err.message : "Could not delete");
       }
     },
+    onBreakout: isGroup
+      ? (m: Message) => {
+          setBreakoutFrom(m);
+          setPicking(true);
+        }
+      : undefined,
     onReact: async (m: Message, emoji: string) => {
       try {
         replace(await api.react(chat.id, m.id, emoji));
@@ -254,7 +265,13 @@ export function ChatPane(props: {
               Group info
             </button>
             {others.length > 0 && (
-              <button className="volatile-btn" onClick={() => setPicking(true)}>
+              <button
+                className="volatile-btn"
+                onClick={() => {
+                  setBreakoutFrom(null);
+                  setPicking(true);
+                }}
+              >
                 Start breakout
               </button>
             )}
@@ -301,6 +318,7 @@ export function ChatPane(props: {
           showSenders={chat.participantIds.length > 2}
           actions={actions}
           seenLabel={seenLabel}
+          unreadAfter={unreadAfter}
           header={
             <>
               {hasOlder && (
@@ -321,7 +339,8 @@ export function ChatPane(props: {
       <Composer
         key={editing?.id ?? "new"}
         placeholder="Message"
-        initialText={editing?.text ?? ""}
+        initialText={editing ? editing.text ?? "" : undefined}
+        draftKey={editing ? undefined : chat.id}
         submitLabel={editing ? "Save" : "Send"}
         banner={composerBanner}
         onCancel={editing || replyTo ? () => (setEditing(null), setReplyTo(null)) : undefined}
@@ -335,10 +354,16 @@ export function ChatPane(props: {
         <StartBreakoutDialog
           candidates={others}
           nameOf={people.nameOf}
-          onClose={() => setPicking(false)}
-          onStart={async (ids) => {
-            const b = await api.startBreakout(chat.id, ids);
+          quote={breakoutFrom ? { senderName: people.nameOf(breakoutFrom.senderId), text: breakoutFrom.text ?? "" } : undefined}
+          preselected={breakoutFrom && breakoutFrom.senderId !== me.id ? [breakoutFrom.senderId] : []}
+          onClose={() => {
             setPicking(false);
+            setBreakoutFrom(null);
+          }}
+          onStart={async (ids) => {
+            const b = await api.startBreakout(chat.id, ids, breakoutFrom?.id);
+            setPicking(false);
+            setBreakoutFrom(null);
             props.onRefreshBreakouts();
             props.onOpenBreakout(b);
           }}

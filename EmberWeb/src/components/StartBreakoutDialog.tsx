@@ -5,16 +5,23 @@ import { Dialog } from "./Dialog";
 export function StartBreakoutDialog({
   candidates,
   nameOf,
+  quote,
+  preselected = [],
   onClose,
   onStart,
 }: {
   candidates: string[];
   nameOf: (id: string) => string;
+  /** The message this breakout replies to, shown at the top. */
+  quote?: { senderName: string; text: string };
+  preselected?: string[];
   onClose: () => void;
   onStart: (ids: string[]) => Promise<void>;
 }) {
   // In a 1:1 chat there is only one possible person, so preselect them.
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(candidates.length === 1 ? candidates : []));
+  const [selected, setSelected] = useState<Set<string>>(
+    () => new Set(candidates.length === 1 ? candidates : preselected.filter((id) => candidates.includes(id)))
+  );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -38,8 +45,14 @@ export function StartBreakoutDialog({
   }
 
   return (
-    <Dialog title="Start a breakout" onClose={onClose}>
+    <Dialog title={quote ? "Reply in a breakout" : "Start a breakout"} onClose={onClose}>
       <div className="stack">
+        {quote && (
+          <blockquote className="breakout-quote">
+            <strong>{quote.senderName}</strong>
+            <span>{quote.text}</span>
+          </blockquote>
+        )}
         <p className="muted">
           A side conversation with some people from this chat. Only they will know it exists. Messages are never
           saved: it clears itself once everyone has left, unless someone asks to <strong>keep</strong> it and nobody

@@ -15,7 +15,7 @@ group chat.
 
 | Folder         | What it is                                                     | Status                                   |
 |----------------|----------------------------------------------------------------|------------------------------------------|
-| `EmberServer/` | Node + TypeScript backend: REST API, WebSocket, SQLite         | Working, 32 automated tests              |
+| `EmberServer/` | Node + TypeScript backend: REST API, WebSocket, SQLite         | Working, 33 automated tests              |
 | `EmberWeb/`    | React + Vite web client                                        | Working: see the feature list below      |
 | `Ember/`       | SwiftUI iOS app                                                | Frozen (no Mac); kept as design reference |
 
@@ -76,10 +76,17 @@ others get Allow / Decline; kept chats land in the **Kept breakouts** tab).
 - Sign up and log in; stays signed in across reloads; sign out everywhere
 - Find people by name or email; DMs and groups
 - Live messages, typing indicators, unread counts, "Seen" receipts
-- Reply, react, edit and delete for everyone (hover a message, click ⋯)
+- Reply, react, edit and delete for everyone (hover a message, click ⋯);
+  click a reply's quote to jump to the original
+- Unsent drafts are kept per chat, and show as "Draft:" in the sidebar
+- Clickable links, date dividers, a "New messages" line where you left off,
+  and a jump-to-latest button that counts what arrived while you scrolled up
+- Search the chat list; unread count in the browser tab title
+- Optional desktop notifications for messages and breakout invites (Settings)
 - Groups: rename, add and remove people, leave; admin passes on automatically
 - Breakouts: invite only, live countdown with the reason, End, keep by vote,
-  typing indicators, and a separate Kept breakouts list
+  typing indicators, a separate Kept breakouts list, and "Reply in a
+  breakout" to start one from a message
 - Rate limits on logins, search and sending
 
 ## Tests

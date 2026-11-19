@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { initials, shortTime } from "../format";
+import { draftFor } from "./Messages";
 import type { SocketStatus } from "../socket";
 import type { Chat, Me } from "../types";
 
@@ -29,7 +31,14 @@ export function Sidebar(props: {
   onSignOut: () => void;
 }) {
   const { me, tab } = props;
-  const list = tab === "chats" ? props.chats : props.kept;
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const all = tab === "chats" ? props.chats : props.kept;
+  const list = q
+    ? all.filter((c) =>
+        [props.titleOf(c), c.lastMessagePreview ?? "", props.parentTitleOf(c) ?? ""].some((s) => s.toLowerCase().includes(q))
+      )
+    : all;
   const keptUnread = props.kept.reduce((n, c) => n + (props.unread[c.id] ?? 0), 0);
 
   return (
@@ -68,12 +77,24 @@ export function Sidebar(props: {
         </button>
       </div>
 
+      <div className="sidebar-search">
+        <input
+          type="search"
+          placeholder={tab === "chats" ? "Search chats" : "Search kept breakouts"}
+          aria-label="Search chats"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => e.key === "Escape" && setQuery("")}
+        />
+      </div>
+
       <nav className="chat-list" aria-label={tab === "chats" ? "Chats" : "Kept breakouts"}>
         {props.loading && list.length === 0 && <p className="muted pad">Loading…</p>}
-        {!props.loading && list.length === 0 && tab === "chats" && (
+        {q && list.length === 0 && <p className="muted pad">Nothing matches "{query.trim()}".</p>}
+        {!q && !props.loading && list.length === 0 && tab === "chats" && (
           <p className="muted pad">No chats yet. Start one with someone who has signed up.</p>
         )}
-        {!props.loading && list.length === 0 && tab === "kept" && (
+        {!q && !props.loading && list.length === 0 && tab === "kept" && (
           <p className="muted pad">
             Breakouts that someone chose to keep end up here. Nothing yet.
           </p>
@@ -83,6 +104,7 @@ export function Sidebar(props: {
           const invites = props.invitesByParent[chat.id] ?? 0;
           const unread = props.unread[chat.id] ?? 0;
           const parent = tab === "kept" ? props.parentTitleOf(chat) : undefined;
+          const draft = props.selectedChatId === chat.id ? "" : draftFor(chat.id);
           return (
             <button
               key={chat.id}
@@ -98,7 +120,15 @@ export function Sidebar(props: {
                   <span className="chat-row-time">{shortTime(chat.lastMessageAt ?? chat.createdAt)}</span>
                 </span>
                 {parent && <span className="chat-row-from">from {parent}</span>}
-                <span className="chat-row-preview">{chat.lastMessagePreview ?? "No messages yet"}</span>
+                <span className="chat-row-preview">
+                  {draft ? (
+                    <>
+                      <span className="draft-label">Draft:</span> {draft}
+                    </>
+                  ) : (
+                    chat.lastMessagePreview ?? "No messages yet"
+                  )}
+                </span>
               </span>
               {invites > 0 && (
                 <span className="badge volatile" title="You were invited to a breakout here">
