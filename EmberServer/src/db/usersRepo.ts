@@ -87,3 +87,46 @@ export function toPublicUser(user: UserRow) {
     notificationsEnabled: !!user.notifications_enabled,
   };
 }
+
+/** Returns which of `ids` belong to real users (order preserved). */
+export function existingUserIds(ids: string[]): string[] {
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => "?").join(", ");
+  const rows = db.prepare(`SELECT id FROM users WHERE id IN (${placeholders})`).all(...ids) as { id: string }[];
+  const found = new Set(rows.map((r) => r.id));
+  return ids.filter((id) => found.has(id));
+}
+
+/**
+ * Finds people to start a chat with: exact match on email or phone, or a
+ * case-insensitive prefix match on display name. Never returns the
+ * caller themself.
+ */
+export function searchUsers(query: string, excludeUserId: string, limit = 20): UserRow[] {
+  const trimmed = query.trim();
+  if (trimmed.length === 0) return [];
+  const escaped = trimmed.toLowerCase().replace(/[!%_]/g, (c) => `!${c}`);
+  return db
+    .prepare(
+      `SELECT * FROM users
+       WHERE id != ?
+         AND (lower(email) = ? OR phone = ? OR lower(display_name) LIKE ? ESCAPE '!')
+       ORDER BY display_name COLLATE NOCASE
+       LIMIT ?`
+    )
+    .all(excludeUserId, trimmed.toLowerCase(), trimmed, `${escaped}%`, limit) as UserRow[];
+}
+
+/**
+ * What other people may see about a user. Unlike `toPublicUser` (which
+ * is for the account owner), this leaves out contact details and
+ * settings.
+ */
+export function toProfile(user: UserRow) {
+  return {
+    id: user.id,
+    displayName: user.display_name,
+    avatarUrl: user.avatar_url,
+    statusMessage: user.status_message,
+  };
+}

@@ -2,25 +2,18 @@ import { Router } from "express";
 import { randomUUID } from "crypto";
 import { requireAuth, AuthedRequest } from "../middleware/requireAuth";
 import { sendMessageSchema } from "../services/schemas";
-import { volatileChatStore, VolatileMessage } from "../services/volatileChatStore";
+import { volatileChatStore, VolatileMessage, VolatileChatMeta } from "../services/volatileChatStore";
+import { toBreakoutJson } from "../services/breakoutLifecycle";
 import { sendToUsers } from "../ws/hub";
-import { createChat, createMessage, updateChatLastMessage } from "../db/chatsRepo";
+import { db } from "../db/database";
+import { createChat, createMessage, updateChatLastMessage, findChatById, toChatJson } from "../db/chatsRepo";
 
 export const breakoutsRouter = Router();
 
 breakoutsRouter.get("/:breakoutId", requireAuth, async (req: AuthedRequest, res) => {
   const meta = requireBreakoutMembership(req, res);
   if (!meta) return;
-  return res.json({
-    id: meta.id,
-    kind: "breakout",
-    parentChatId: meta.parentChatId,
-    participantIds: meta.participantIds,
-    isPersisted: false,
-    createdAt: meta.createdAt,
-    createdByUserId: meta.createdByUserId,
-    expiresAt: meta.expiresAt,
-  });
+  return res.json(toBreakoutJson(meta));
 });
 
 breakoutsRouter.get("/:breakoutId/messages", requireAuth, async (req: AuthedRequest, res) => {
@@ -50,41 +43,64 @@ breakoutsRouter.post("/:breakoutId/messages", requireAuth, async (req: AuthedReq
   return res.status(201).json(message);
 });
 
-/** "Keep this chat" — promotes the breakout to a persisted chat. */
+/**
+ * Writes a breakout and its whole history to the database in one
+ * transaction, so a failure halfway through can never leave a
+ * half-saved chat behind.
+ */
+const persistBreakout = db.transaction((messages: VolatileMessage[], chatMeta: VolatileChatMeta) => {
+  createChat({
+    id: chatMeta.id,
+    kind: "breakout",
+    parentChatId: chatMeta.parentChatId,
+    isPersisted: true,
+    createdByUserId: chatMeta.createdByUserId,
+    createdAt: new Date(chatMeta.createdAt),
+    participantIds: chatMeta.participantIds,
+  });
+  for (const m of messages) {
+    createMessage({
+      id: m.id,
+      chatId: chatMeta.id,
+      senderId: m.senderId,
+      text: m.text,
+      sentAt: new Date(m.sentAt),
+    });
+  }
+  if (messages.length > 0) {
+    const last = messages[messages.length - 1];
+    updateChatLastMessage(chatMeta.id, last.text?.slice(0, 120) ?? null, new Date(last.sentAt));
+  }
+});
+
+/** "Keep this chat": promotes the breakout to a persisted chat. */
 breakoutsRouter.post("/:breakoutId/keep", requireAuth, async (req: AuthedRequest, res) => {
   const meta = requireBreakoutMembership(req, res);
   if (!meta) return;
 
-  const persisted = await volatileChatStore.promote(meta.id, async (messages, chatMeta) => {
-    createChat({
-      id: chatMeta.id,
-      kind: "breakout",
-      parentChatId: chatMeta.parentChatId,
-      isPersisted: true,
-      createdByUserId: chatMeta.createdByUserId,
-      createdAt: new Date(chatMeta.createdAt),
-      participantIds: chatMeta.participantIds,
+  let persisted: VolatileMessage[];
+  try {
+    persisted = await volatileChatStore.promote(meta.id, async (messages, chatMeta) => {
+      persistBreakout(messages, chatMeta);
     });
-    for (const m of messages) {
-      createMessage({
-        id: m.id,
-        chatId: chatMeta.id,
-        senderId: m.senderId,
-        text: m.text,
-        sentAt: new Date(m.sentAt),
-      });
-    }
-    if (messages.length > 0) {
-      const last = messages[messages.length - 1];
-      updateChatLastMessage(chatMeta.id, last.text?.slice(0, 120) ?? null, new Date(last.sentAt));
-    }
-  });
+  } catch (err) {
+    // The store only purges after the handler succeeds, so the chat is
+    // still live in memory and the user can try again.
+    console.error(`[breakouts] failed to keep ${meta.id}`, err);
+    return res.status(500).json({ error: "Could not save this chat. It is still open, please try again." });
+  }
 
-  sendToUsers(meta.participantIds, { type: "breakout:promoted", chatId: meta.id });
+  const chat = findChatById(meta.id);
+  sendToUsers(meta.participantIds, {
+    type: "breakout:promoted",
+    chatId: meta.id,
+    parentChatId: meta.parentChatId,
+    chat: chat ? toChatJson(chat) : undefined,
+  });
   return res.json({ id: meta.id, isPersisted: true, messageCount: persisted.length });
 });
 
-/** "End Breakout" — starts the clearance warning window for everyone. */
+/** "End Breakout": starts the clearance warning window for everyone. */
 breakoutsRouter.post("/:breakoutId/end", requireAuth, async (req: AuthedRequest, res) => {
   const meta = requireBreakoutMembership(req, res);
   if (!meta) return;
@@ -93,7 +109,7 @@ breakoutsRouter.post("/:breakoutId/end", requireAuth, async (req: AuthedRequest,
 });
 
 function requireBreakoutMembership(req: AuthedRequest, res: any) {
-  const meta = volatileChatStore.chat(req.params.breakoutId);
+  const meta = volatileChatStore.chat(String(req.params.breakoutId));
   if (!meta) {
     res.status(404).json({ error: "Breakout chat not found (it may have already been cleared)" });
     return null;

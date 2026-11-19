@@ -39,14 +39,19 @@ POST   /auth/login                 { email|phone, password }
 GET    /auth/me                    (bearer token)
 
 PATCH  /users/me                   { displayName?, statusMessage?, tombstoneLoggingEnabled?, notificationsEnabled?, fcmToken? }
+GET    /users/search?q=<text>      exact email/phone or display-name prefix; profiles only, no contact details
+GET    /users/:id                  public profile (id, displayName, avatarUrl, statusMessage)
 
 GET    /chats                      list chats for the current user
 POST   /chats                      { kind: "direct"|"group", title?, participantIds }
+                                   400 on unknown user ids; a direct chat that already
+                                   exists is returned (200) instead of duplicated
 GET    /chats/:id
 GET    /chats/:id/messages         ?before=<ISO date>&limit=<n>
 POST   /chats/:id/messages         { text, replyToMessageId? }
 POST   /chats/:id/typing           { isTyping }
 POST   /chats/:id/breakout         { participantIds }  -> starts a breakout chat
+GET    /chats/:id/breakouts        { active: [...live breakouts you're in], kept: [...saved breakout threads] }
 
 GET    /breakouts/:id
 GET    /breakouts/:id/messages
@@ -66,18 +71,42 @@ Server -> client events (persisted chats, pushed automatically):
 `{"type":"message", chatId, message}`
 `{"type":"typing", chatId, userId, isTyping}`
 `{"type":"breakout:started", parentChatId, breakout}`
-`{"type":"breakout:promoted", chatId}`
+`{"type":"breakout:promoted", chatId, parentChatId, chat}`
+`{"type":"breakout:cleared", chatId, parentChatId}` (cleared without being kept)
+
+Kept breakouts never appear in `GET /chats`. Show them as threads under
+their parent chat using `GET /chats/:id/breakouts`.
 
 Client -> server (breakout chats only — persisted chats use the REST
 endpoints above, delivery is server-pushed):
 `{"type":"breakout:subscribe", chatId}` -> replies with
-  `{"type":"breakout:snapshot", chatId, messages}` then streams
+  `{"type":"breakout:snapshot", chatId, breakout, messages}` then streams
   `{"type":"message", chatId, message}`,
-  `{"type":"expiryWarning", chatId, secondsRemaining}`,
+  `{"type":"expiryWarning", chatId, secondsRemaining, reason}`,
+  `{"type":"warningCancelled", chatId}`,
   `{"type":"purged", chatId}`, `{"type":"promoted", chatId}`
 `{"type":"breakout:send", chatId, text}`
 `{"type":"breakout:unsubscribe", chatId}`
 `{"type":"ping"}` -> `{"type":"pong"}`
+
+### Breakout lifecycle (the server is the source of truth)
+
+Clients should render these events, not run their own timers, so every
+participant sees the same countdown. A countdown starts for one of
+three reasons, and `reason` says which:
+
+| reason       | starts when                                              | cancelled by            |
+|--------------|----------------------------------------------------------|-------------------------|
+| `inactivity` | no messages for `BREAKOUT_DEFAULT_INACTIVITY_SECONDS`    | anyone sending a message |
+| `empty`      | nobody subscribed for `BREAKOUT_EMPTY_GRACE_SECONDS`     | anyone subscribing again |
+| `ended`      | someone called `POST /breakouts/:id/end`                 | only Keep Chat           |
+
+A `breakout:subscribe` counts as viewing the chat. Several connections
+from the same user count as one viewer. If the countdown
+(`BREAKOUT_WARNING_WINDOW_SECONDS`) runs out, the chat is purged from
+memory. Keep Chat writes the chat and its history in a single database
+transaction. If that fails, the chat stays live and the call can be
+retried. Simultaneous Keep taps are safe.
 
 ## Local development
 
@@ -96,10 +125,20 @@ startup — no separate migration command needed for this setup.
 npm test
 ```
 
-Covers the `VolatileChatStore` lifecycle: registration, message append +
-event emission, the expiry-warning countdown auto-purging, "Keep Chat"
-promotion (asserting the handler receives full history and memory is
-empty afterward), and discard (asserting zero trace remains).
+Two suites, both run against an in-memory database with shortened
+timers:
+
+- `test/volatileChatStore.test.ts`: the store on its own. Append,
+  End countdown and purge, Keep (including a failed save being
+  retryable and concurrent Keeps), the "everyone left" countdown and
+  cancelling it by coming back, and inactivity vs explicit end.
+- `test/api.test.ts`: boots the real HTTP + WebSocket server on a random
+  port and drives it like a client. Auth, user search, chat creation
+  rules, the full invite / join / chat / keep / thread flow, End
+  Breakout clearing with no trace, auto-clearing when everyone leaves,
+  and who may be pulled into a breakout.
+
+Requires Node 22 or newer (developed on Node 26).
 
 ## Docker
 
@@ -157,8 +196,9 @@ fly deploy
 - Add a Volume mounted at `/data`.
 - Set the same env vars as above.
 
-In every case: set `JWT_SECRET` to a real random value (never the
-`.env.example` default), set `CORS_ORIGIN` to your app's actual origin
+In every case: set `JWT_SECRET` to a real random value. With
+`NODE_ENV=production` (the Docker image sets it) the server refuses to
+start if `JWT_SECRET` is missing or still the `.env.example` placeholder, set `CORS_ORIGIN` to your app's actual origin
 if you add a web client, and put the service behind TLS (Fly/Render/
 Railway all terminate TLS for you automatically) — the iOS client uses
 `wss://`/`https://` by default (see `EmberBackendService.swift`).
@@ -170,6 +210,10 @@ Railway all terminate TLS for you automatically) — the iOS client uses
   file.
 - `src/routes/media.ts` — returns `501` instead of a presigned upload
   URL; wire to S3/GCS/Firebase Storage per the comment in that file.
+- Each server instance keeps live breakouts in its own memory, so a
+  restart clears them and running more than one instance needs sticky
+  routing by chat id (see the note in `src/services/volatileChatStore.ts`).
+- No rate limiting yet on login, search or message sends.
 - Group chat admin management (add/remove member, role changes) — the
   data model supports it (`chat_participants.role`) but no endpoints
   exist yet beyond creation.

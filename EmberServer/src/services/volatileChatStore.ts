@@ -19,9 +19,19 @@ export interface VolatileChatMeta {
   expiresAt: string;
 }
 
+/**
+ * Why the clearance countdown started. It decides what can cancel it:
+ *  - "inactivity": no messages for the timeout. A new message cancels it.
+ *  - "empty": nobody has had the chat open for the grace period.
+ *    Someone opening it again cancels it.
+ *  - "ended": a participant tapped End Breakout. Only Keep Chat stops it.
+ */
+export type WarningReason = "inactivity" | "empty" | "ended";
+
 export type VolatileChatEvent =
   | { type: "message"; chatId: string; message: VolatileMessage }
-  | { type: "expiryWarning"; chatId: string; secondsRemaining: number }
+  | { type: "expiryWarning"; chatId: string; secondsRemaining: number; reason: WarningReason }
+  | { type: "warningCancelled"; chatId: string }
   | { type: "purged"; chatId: string }
   | { type: "promoted"; chatId: string };
 
@@ -29,6 +39,12 @@ export type PromotionHandler = (
   messages: VolatileMessage[],
   chat: VolatileChatMeta
 ) => Promise<void>;
+
+export interface VolatileChatStoreOptions {
+  warningWindowSeconds: number;
+  /** How long a chat may have zero viewers before the warning starts. */
+  emptyGraceSeconds: number;
+}
 
 /**
  * Non-persistent, in-process store for breakout chat messages. This is
@@ -38,21 +54,36 @@ export type PromotionHandler = (
  * held in this process's memory and is never written to the database
  * unless `promote()` is explicitly called.
  *
- * NOTE: this is process-local state. If you deploy more than one
- * server instance, either (a) route a given breakout chat's traffic to
- * a single instance via sticky sessions / consistent hashing on
- * chatId, or (b) swap this for a Redis-backed implementation behind
- * the same interface — the REST/WS layers only depend on the methods
- * below, not on this being in-memory.
+ * The server is the single source of truth for this lifecycle. Clients
+ * should render the `expiryWarning` / `warningCancelled` / `purged` /
+ * `promoted` events they receive rather than running their own timers,
+ * so every participant sees the same countdown.
+ *
+ * NOTE: this is process-local state. A restart clears every live
+ * breakout (which is in the spirit of the feature, but worth knowing),
+ * and if you deploy more than one server instance you must either route
+ * a given breakout chat's traffic to a single instance (sticky sessions
+ * or consistent hashing on chatId) or swap this for a Redis-backed
+ * implementation behind the same interface.
  */
-class VolatileChatStore extends EventEmitter {
+export class VolatileChatStore extends EventEmitter {
   private messagesByChat = new Map<string, VolatileMessage[]>();
   private chatsById = new Map<string, VolatileChatMeta>();
   private expiryTimers = new Map<string, NodeJS.Timeout>();
   private warningIntervals = new Map<string, NodeJS.Timeout>();
+  private warningReasons = new Map<string, WarningReason>();
+  /** chatId -> userId -> number of open connections viewing it. */
+  private viewers = new Map<string, Map<string, number>>();
+  private emptyTimers = new Map<string, NodeJS.Timeout>();
+  private promoting = new Set<string>();
 
-  constructor(private readonly warningWindowSeconds: number) {
+  private readonly warningWindowSeconds: number;
+  private readonly emptyGraceSeconds: number;
+
+  constructor(options: VolatileChatStoreOptions) {
     super();
+    this.warningWindowSeconds = options.warningWindowSeconds;
+    this.emptyGraceSeconds = options.emptyGraceSeconds;
     this.setMaxListeners(0);
   }
 
@@ -62,6 +93,9 @@ class VolatileChatStore extends EventEmitter {
       this.messagesByChat.set(meta.id, []);
     }
     this.scheduleExpiry(meta.id);
+    // Nobody is viewing it yet. If nobody opens it within the grace
+    // period, it should not sit in memory for the full inactivity timeout.
+    this.scheduleEmptyCheck(meta.id);
   }
 
   chat(chatId: string): VolatileChatMeta | undefined {
@@ -76,6 +110,20 @@ class VolatileChatStore extends EventEmitter {
     return this.chatsById.size;
   }
 
+  /** Live breakouts started from `parentChatId`. */
+  chatsForParent(parentChatId: string): VolatileChatMeta[] {
+    return [...this.chatsById.values()].filter((meta) => meta.parentChatId === parentChatId);
+  }
+
+  /** Current countdown reason, or undefined if no countdown is running. */
+  warningReason(chatId: string): WarningReason | undefined {
+    return this.warningReasons.get(chatId);
+  }
+
+  viewerCount(chatId: string): number {
+    return this.viewers.get(chatId)?.size ?? 0;
+  }
+
   /** Subscribe to lifecycle events for one chat. Returns an unsubscribe fn. */
   onChatEvent(chatId: string, listener: (event: VolatileChatEvent) => void): () => void {
     const channel = `chat:${chatId}`;
@@ -83,7 +131,7 @@ class VolatileChatStore extends EventEmitter {
     return () => this.off(channel, listener);
   }
 
-  private emit_(chatId: string, event: VolatileChatEvent) {
+  private emitChatEvent(chatId: string, event: VolatileChatEvent) {
     this.emit(`chat:${chatId}`, event);
   }
 
@@ -92,62 +140,132 @@ class VolatileChatStore extends EventEmitter {
     const list = this.messagesByChat.get(chatId) ?? [];
     list.push(message);
     this.messagesByChat.set(chatId, list);
-    this.emit_(chatId, { type: "message", chatId, message });
+    this.emitChatEvent(chatId, { type: "message", chatId, message });
+    // People are still talking, so an inactivity countdown no longer applies.
+    if (this.warningReasons.get(chatId) === "inactivity") this.cancelWarning(chatId);
     this.resetExpiry(chatId);
   }
 
-  /** Explicit "End Breakout" — skips straight to the warning window. */
+  /** Explicit "End Breakout": skips straight to the warning window. */
   requestEnd(chatId: string): void {
-    this.beginWarningWindow(chatId);
+    // An explicit end outranks a softer countdown that is already running.
+    const current = this.warningReasons.get(chatId);
+    if (current && current !== "ended") this.cancelWarning(chatId, { silent: true });
+    this.beginWarningWindow(chatId, "ended");
   }
 
   /** Transport layer reports zero active viewers left. */
   allParticipantsLeft(chatId: string): void {
-    this.beginWarningWindow(chatId);
+    this.beginWarningWindow(chatId, "empty");
+  }
+
+  /**
+   * A participant opened the chat (one call per connection). If the
+   * countdown was only running because the room was empty, it stops.
+   */
+  viewerJoined(chatId: string, userId: string): void {
+    if (!this.chatsById.has(chatId)) return;
+    const byUser = this.viewers.get(chatId) ?? new Map<string, number>();
+    byUser.set(userId, (byUser.get(userId) ?? 0) + 1);
+    this.viewers.set(chatId, byUser);
+
+    this.clearEmptyTimer(chatId);
+    if (this.warningReasons.get(chatId) === "empty") this.cancelWarning(chatId);
+  }
+
+  /**
+   * A participant's connection closed or unsubscribed. Once nobody is
+   * left, wait `emptyGraceSeconds` (to ride out app switches and flaky
+   * networks) and then start the clearance warning.
+   */
+  viewerLeft(chatId: string, userId: string): void {
+    const byUser = this.viewers.get(chatId);
+    if (!byUser) return;
+    const remaining = (byUser.get(userId) ?? 0) - 1;
+    if (remaining > 0) byUser.set(userId, remaining);
+    else byUser.delete(userId);
+
+    if (byUser.size === 0) {
+      this.viewers.delete(chatId);
+      this.scheduleEmptyCheck(chatId);
+    }
   }
 
   /**
    * Hands the full history to `handler` (expected to write to the DB),
    * then purges memory. Callable at any point, not just during the
-   * warning window ("Keep Chat" / mid-conversation save).
+   * warning window ("Keep Chat" / mid-conversation save). If the
+   * handler throws, nothing is purged and the error propagates, so the
+   * caller can retry. Concurrent calls for the same chat are ignored
+   * while the first one is in flight.
    */
   async promote(chatId: string, handler: PromotionHandler): Promise<VolatileMessage[]> {
-    const history = this.messagesByChat.get(chatId) ?? [];
     const meta = this.chatsById.get(chatId);
-    if (!meta) return history;
-    await handler(history, meta);
-    this.emit_(chatId, { type: "promoted", chatId });
-    this.purge(chatId);
-    return history;
+    if (!meta || this.promoting.has(chatId)) return this.messages(chatId);
+    this.promoting.add(chatId);
+    try {
+      const history = [...this.messages(chatId)];
+      await handler(history, meta);
+      this.emitChatEvent(chatId, { type: "promoted", chatId });
+      this.purge(chatId);
+      return history;
+    } finally {
+      this.promoting.delete(chatId);
+    }
   }
 
   /** Hard delete: removes all message content + metadata from memory. */
   purge(chatId: string): void {
+    if (!this.chatsById.has(chatId)) return;
     this.messagesByChat.delete(chatId);
     this.chatsById.delete(chatId);
-    const expiry = this.expiryTimers.get(chatId);
-    if (expiry) clearTimeout(expiry);
-    this.expiryTimers.delete(chatId);
+    this.clearTimer(this.expiryTimers, chatId);
+    this.clearEmptyTimer(chatId);
     const warning = this.warningIntervals.get(chatId);
     if (warning) clearInterval(warning);
     this.warningIntervals.delete(chatId);
-    this.emit_(chatId, { type: "purged", chatId });
+    this.warningReasons.delete(chatId);
+    this.viewers.delete(chatId);
+    this.emitChatEvent(chatId, { type: "purged", chatId });
     this.removeAllListeners(`chat:${chatId}`);
   }
 
+  // --- timers -----------------------------------------------------------
+
+  private clearTimer(map: Map<string, NodeJS.Timeout>, chatId: string) {
+    const timer = map.get(chatId);
+    if (timer) clearTimeout(timer);
+    map.delete(chatId);
+  }
+
+  private clearEmptyTimer(chatId: string) {
+    this.clearTimer(this.emptyTimers, chatId);
+  }
+
+  private scheduleEmptyCheck(chatId: string): void {
+    this.clearEmptyTimer(chatId);
+    if (!this.chatsById.has(chatId)) return;
+    const timer = setTimeout(() => {
+      this.emptyTimers.delete(chatId);
+      if (this.viewerCount(chatId) === 0) this.allParticipantsLeft(chatId);
+    }, this.emptyGraceSeconds * 1000);
+    timer.unref?.();
+    this.emptyTimers.set(chatId, timer);
+  }
+
   private scheduleExpiry(chatId: string): void {
-    const existing = this.expiryTimers.get(chatId);
-    if (existing) clearTimeout(existing);
+    this.clearTimer(this.expiryTimers, chatId);
 
     const meta = this.chatsById.get(chatId);
     if (!meta) return;
     const delayMs = new Date(meta.expiresAt).getTime() - Date.now();
 
     if (delayMs <= 0) {
-      this.beginWarningWindow(chatId);
+      this.beginWarningWindow(chatId, "inactivity");
       return;
     }
-    const timer = setTimeout(() => this.beginWarningWindow(chatId), delayMs);
+    const timer = setTimeout(() => this.beginWarningWindow(chatId, "inactivity"), delayMs);
+    timer.unref?.();
     this.expiryTimers.set(chatId, timer);
   }
 
@@ -155,17 +273,27 @@ class VolatileChatStore extends EventEmitter {
     const meta = this.chatsById.get(chatId);
     if (!meta) return;
     meta.expiresAt = new Date(Date.now() + meta.inactivityTimeoutSeconds * 1000).toISOString();
-    this.chatsById.set(chatId, meta);
     this.scheduleExpiry(chatId);
   }
 
-  private beginWarningWindow(chatId: string): void {
+  private cancelWarning(chatId: string, options: { silent?: boolean } = {}): void {
+    const interval = this.warningIntervals.get(chatId);
+    if (!interval) return;
+    clearInterval(interval);
+    this.warningIntervals.delete(chatId);
+    this.warningReasons.delete(chatId);
+    // The chat is alive again, so it gets a fresh inactivity timeout.
+    this.resetExpiry(chatId);
+    if (!options.silent) this.emitChatEvent(chatId, { type: "warningCancelled", chatId });
+  }
+
+  private beginWarningWindow(chatId: string, reason: WarningReason): void {
     if (!this.chatsById.has(chatId) || this.warningIntervals.has(chatId)) return;
-    const expiry = this.expiryTimers.get(chatId);
-    if (expiry) clearTimeout(expiry);
+    this.clearTimer(this.expiryTimers, chatId);
 
     let remaining = this.warningWindowSeconds;
-    this.emit_(chatId, { type: "expiryWarning", chatId, secondsRemaining: remaining });
+    this.warningReasons.set(chatId, reason);
+    this.emitChatEvent(chatId, { type: "expiryWarning", chatId, secondsRemaining: remaining, reason });
 
     const interval = setInterval(() => {
       remaining -= 1;
@@ -174,7 +302,7 @@ class VolatileChatStore extends EventEmitter {
         return;
       }
       if (remaining > 0) {
-        this.emit_(chatId, { type: "expiryWarning", chatId, secondsRemaining: remaining });
+        this.emitChatEvent(chatId, { type: "expiryWarning", chatId, secondsRemaining: remaining, reason });
       } else {
         clearInterval(interval);
         this.warningIntervals.delete(chatId);
@@ -186,4 +314,7 @@ class VolatileChatStore extends EventEmitter {
   }
 }
 
-export const volatileChatStore = new VolatileChatStore(config.breakoutWarningWindowSeconds);
+export const volatileChatStore = new VolatileChatStore({
+  warningWindowSeconds: config.breakoutWarningWindowSeconds,
+  emptyGraceSeconds: config.breakoutEmptyGraceSeconds,
+});

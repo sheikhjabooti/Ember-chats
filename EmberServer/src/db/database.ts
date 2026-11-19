@@ -1,10 +1,9 @@
 import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
+import { config } from "../config";
 
-const dbFile = process.env.DATABASE_FILE ?? "./ember.db";
-
-export const db = new Database(dbFile);
+export const db = new Database(config.databaseFile);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 

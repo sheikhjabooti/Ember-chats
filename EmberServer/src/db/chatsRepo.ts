@@ -173,3 +173,33 @@ export function createTombstone(input: {
     input.wasKept ? 1 : 0
   );
 }
+
+/**
+ * Breakouts that were kept (promoted) under `parentChatId` and that
+ * `userId` took part in. These are hidden from the main chat list and
+ * surface as threads under their parent chat instead.
+ */
+export function listKeptBreakouts(parentChatId: string, userId: string): ChatRow[] {
+  return db
+    .prepare(
+      `SELECT c.* FROM chats c
+       JOIN chat_participants p ON p.chat_id = c.id
+       WHERE c.parent_chat_id = ? AND c.kind = 'breakout' AND p.user_id = ?
+       ORDER BY COALESCE(c.last_message_at, c.created_at) DESC`
+    )
+    .all(parentChatId, userId) as ChatRow[];
+}
+
+/** An existing direct chat between exactly these two users, if any. */
+export function findDirectChat(userA: string, userB: string): ChatRow | undefined {
+  return db
+    .prepare(
+      `SELECT c.* FROM chats c
+       WHERE c.kind = 'direct'
+         AND EXISTS (SELECT 1 FROM chat_participants WHERE chat_id = c.id AND user_id = ?)
+         AND EXISTS (SELECT 1 FROM chat_participants WHERE chat_id = c.id AND user_id = ?)
+         AND (SELECT COUNT(*) FROM chat_participants WHERE chat_id = c.id) = 2
+       LIMIT 1`
+    )
+    .get(userA, userB) as ChatRow | undefined;
+}

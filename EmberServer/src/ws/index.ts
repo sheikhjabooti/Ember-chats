@@ -11,6 +11,8 @@ interface ClientMessage {
   text?: string;
 }
 
+const MAX_MESSAGE_LENGTH = 4000;
+
 /**
  * One WebSocket connection per client, authenticated via `?token=` in
  * the URL (a JWT from POST /auth/login). Handles:
@@ -18,6 +20,9 @@ interface ClientMessage {
  *    messages/typing events to this user (see routes/chats.ts)
  *  - subscribing to a breakout chat's live event stream, bridging
  *    `VolatileChatStore` events straight to the socket
+ *  - presence: a subscription counts as "viewing" the breakout, and when
+ *    nobody is viewing it any more the store starts the clearance
+ *    countdown after a grace period
  *  - sending breakout messages directly over the socket (lower latency
  *    than the REST fallback in routes/breakouts.ts)
  */
@@ -38,7 +43,19 @@ export function attachWebSocketServer(server: Server): WebSocketServer {
 
     registerConnection(userId, socket);
 
+    const send = (payload: unknown) => {
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
+    };
+
     const breakoutUnsubscribers = new Map<string, () => void>();
+
+    const leaveBreakout = (chatId: string) => {
+      const unsubscribe = breakoutUnsubscribers.get(chatId);
+      if (!unsubscribe) return;
+      unsubscribe();
+      breakoutUnsubscribers.delete(chatId);
+      volatileChatStore.viewerLeft(chatId, userId);
+    };
 
     socket.on("message", (raw) => {
       let parsed: ClientMessage;
@@ -50,46 +67,54 @@ export function attachWebSocketServer(server: Server): WebSocketServer {
 
       switch (parsed.type) {
         case "ping":
-          socket.send(JSON.stringify({ type: "pong" }));
+          send({ type: "pong" });
           break;
 
         case "breakout:subscribe": {
-          if (!parsed.chatId || breakoutUnsubscribers.has(parsed.chatId)) return;
-          const meta = volatileChatStore.chat(parsed.chatId);
+          const chatId = parsed.chatId;
+          if (!chatId || breakoutUnsubscribers.has(chatId)) return;
+          const meta = volatileChatStore.chat(chatId);
           if (!meta || !meta.participantIds.includes(userId)) {
-            socket.send(JSON.stringify({ type: "error", message: "Cannot subscribe to that breakout chat" }));
+            send({ type: "error", chatId, message: "Cannot subscribe to that breakout chat" });
             return;
           }
-          const unsubscribe = volatileChatStore.onChatEvent(parsed.chatId, (event) => {
-            socket.send(JSON.stringify({ ...event, chatId: parsed.chatId }));
+          const unsubscribe = volatileChatStore.onChatEvent(chatId, (event) => {
+            send({ ...event, chatId });
+            // The store drops its listeners on purge, so forget ours too.
+            if (event.type === "purged") breakoutUnsubscribers.delete(chatId);
           });
-          breakoutUnsubscribers.set(parsed.chatId, unsubscribe);
-          socket.send(
-            JSON.stringify({
-              type: "breakout:snapshot",
-              chatId: parsed.chatId,
-              messages: volatileChatStore.messages(parsed.chatId),
-            })
-          );
+          breakoutUnsubscribers.set(chatId, unsubscribe);
+          send({
+            type: "breakout:snapshot",
+            chatId,
+            breakout: { ...meta },
+            messages: volatileChatStore.messages(chatId),
+          });
+          // Joining can cancel an "everyone left" countdown, which emits
+          // `warningCancelled`, so do it after the snapshot is sent.
+          volatileChatStore.viewerJoined(chatId, userId);
           break;
         }
 
         case "breakout:unsubscribe": {
-          if (!parsed.chatId) return;
-          breakoutUnsubscribers.get(parsed.chatId)?.();
-          breakoutUnsubscribers.delete(parsed.chatId);
+          if (parsed.chatId) leaveBreakout(parsed.chatId);
           break;
         }
 
         case "breakout:send": {
-          if (!parsed.chatId || !parsed.text) return;
+          const text = typeof parsed.text === "string" ? parsed.text.trim() : "";
+          if (!parsed.chatId || text.length === 0) return;
+          if (text.length > MAX_MESSAGE_LENGTH) {
+            send({ type: "error", chatId: parsed.chatId, message: `Message longer than ${MAX_MESSAGE_LENGTH} characters` });
+            return;
+          }
           const meta = volatileChatStore.chat(parsed.chatId);
           if (!meta || !meta.participantIds.includes(userId)) return;
           const message: VolatileMessage = {
             id: randomUUID(),
             chatId: parsed.chatId,
             senderId: userId,
-            text: parsed.text,
+            text,
             sentAt: new Date().toISOString(),
           };
           volatileChatStore.append(parsed.chatId, message);
@@ -100,8 +125,7 @@ export function attachWebSocketServer(server: Server): WebSocketServer {
 
     socket.on("close", () => {
       unregisterConnection(userId, socket);
-      for (const unsubscribe of breakoutUnsubscribers.values()) unsubscribe();
-      breakoutUnsubscribers.clear();
+      for (const chatId of [...breakoutUnsubscribers.keys()]) leaveBreakout(chatId);
     });
   });
 
