@@ -3,8 +3,9 @@
 Where things stand (November 2026): the server and web client work end to
 end. You can sign up, find people, chat in DMs and groups in real time, and
 start breakouts that count down, clear themselves, or get kept as threads.
-The iOS app exists but can't be built without a Mac and still expects the
-older server behaviour.
+The SwiftUI iOS app is frozen because there's no Mac to build it (see
+the end of this file). Phones get the web app as an installable PWA
+first, then an Expo app built in the cloud.
 
 The plan is in four stages. Each one leaves the app in a usable state.
 
@@ -97,9 +98,20 @@ Only worth doing once real people use it.
       than one server instance can run. The store already sits behind an
       interface meant for this.
 - [ ] Move from SQLite to Postgres (only `src/db/*Repo.ts` changes).
-- [ ] Native mobile: either an Expo (React Native) app reusing the web
-      client's `api.ts` and `socket.ts`, testable on an iPhone through
-      Expo Go with no Mac, or bring the SwiftUI app up to date once a Mac
-      is available. The Swift code needs: server driven countdowns,
-      joining breakouts, kept threads, saved login, and fractional second
-      date parsing.
+- [ ] Native mobile with **Expo (React Native)**, all from Windows. No Mac
+      is needed at any point:
+      - develop on a real iPhone or Android phone with the Expo Go app
+      - reuse the web client's `api.ts`, `socket.ts` and `types.ts`
+      - build the App Store and Play Store binaries in the cloud with EAS
+        Build, and submit with EAS Submit (the App Store needs an Apple
+        Developer account, 99 USD a year)
+      - real push notifications through Expo's push service
+
+## The SwiftUI app (`Ember/`)
+
+There's no Mac on the horizon, so the SwiftUI app is **frozen**. It
+stays in the repo as a reference for the iOS design (amber dashed
+bubbles, the volatile pill, the clearance sheet), but it won't be built
+or kept in sync with the server. Phones are covered first by the PWA
+(stage 2) and then by the Expo app (stage 4). If it's still unused once
+the Expo app ships, delete it.

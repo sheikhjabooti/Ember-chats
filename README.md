@@ -16,14 +16,22 @@ group chat.
 |----------------|----------------------------------------------------------------|------------------------------------------|
 | `EmberServer/` | Node + TypeScript backend: REST API, WebSocket, SQLite         | Working, 19 automated tests              |
 | `EmberWeb/`    | React + Vite web client                                        | Working: chats, search, breakouts, Keep  |
-| `Ember/`       | SwiftUI iOS app                                                | Needs a Mac to build; behind the server  |
+| `Ember/`       | SwiftUI iOS app                                                | Frozen (no Mac); kept as design reference |
 
 See [ROADMAP.md](ROADMAP.md) for what's next.
 
 ## Run it locally
 
-You need **Node.js 22 or newer** (`node -v` to check). On Windows, open a
-new terminal after installing Node so it is on your PATH.
+You need **Node.js 22 or newer** (`node -v` to check).
+
+If `npm` is "not recognized" right after installing Node, the terminal was
+opened before the install and still has the old PATH. Close the app it
+runs in (VS Code, Claude, Windows Terminal) and reopen it, or reload the
+PATH in the current PowerShell window:
+
+```powershell
+$env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
+```
 
 **1. Start the server** (terminal 1):
 
