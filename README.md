@@ -17,9 +17,9 @@ group chat.
 |----------------|----------------------------------------------------------------|------------------------------------------|
 | `EmberServer/` | Node + TypeScript backend: REST API, WebSocket, SQLite         | Working, 33 automated tests              |
 | `EmberWeb/`    | React + Vite web client                                        | Working: see the feature list below      |
-| `Ember/`       | SwiftUI iOS app                                                | Frozen (no Mac); kept as design reference |
 
-See [ROADMAP.md](ROADMAP.md) for what's next.
+See [ROADMAP.md](ROADMAP.md) for what's next and [API.md](API.md) for the
+server's REST and WebSocket reference.
 
 ## Run it locally
 
@@ -123,6 +123,41 @@ All in `EmberServer/.env`:
 Lower the first two to watch breakouts clear themselves quickly while
 you're trying things out.
 
-More detail: [EmberServer/README.md](EmberServer/README.md) (API and
-WebSocket reference, Docker, deploying), [EmberWeb/README.md](EmberWeb/README.md),
-[Ember/README.md](Ember/README.md) (iOS).
+## How the code is laid out
+
+**Server** (`EmberServer/src`): Express routes in `routes/`, the in-memory
+breakout store and its lifecycle in `services/`, SQLite access in `db/`
+(schema plus numbered migrations, applied on startup), and the WebSocket
+in `ws/`. SQLite keeps it to one process and one file; only `db/*Repo.ts`
+would change to move to Postgres.
+
+**Web** (`EmberWeb/src`): plain React state and one WebSocket, no UI
+framework. `api.ts` is the REST client, `socket.ts` the WebSocket (logs
+in with its first message, reconnects, re-subscribes), and
+`components/Workspace.tsx` the signed-in shell. The breakout view runs no
+timers of its own; it shows whatever the server says, so everyone sees
+the same countdown.
+
+## Deploying
+
+The server ships as a Docker image (`EmberServer/Dockerfile`, or
+`docker compose up` with `docker-compose.yml`) that keeps its SQLite file
+on a volume at `/data`. Any host that runs a container with a persistent
+volume works (Fly.io, Render, Railway). Set `JWT_SECRET` to a real random
+value: with `NODE_ENV=production`, which the image sets, the server
+refuses to start without one. Put it behind HTTPS so the WebSocket runs
+over `wss://`.
+
+`npm run build` in `EmberWeb` makes a static site in `EmberWeb/dist`. If
+it's served from a different origin than the server, build it with
+`VITE_API_URL=https://your-server` and `VITE_WS_URL=wss://your-server/ws`.
+Serving both from one origin is planned in stage 2 of the roadmap.
+
+## Known limits
+
+- Push notifications (`src/services/push.ts`) and media uploads
+  (`src/routes/media.ts`) are stubs.
+- Live breakouts live in one server's memory: a restart clears them, and
+  more than one instance would need sticky routing by chat id.
+- Rate limits are per instance and in memory. `RATE_LIMITS=off` turns
+  them off.

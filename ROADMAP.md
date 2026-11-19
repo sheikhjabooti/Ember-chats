@@ -4,9 +4,9 @@ Where things stand (November 2026): stage 1 is done. The server and web
 client cover the everyday chat basics (replies, reactions, edits, unread
 counts, receipts, group management) and breakouts are invite only, with
 keeping decided by a vote.
-The SwiftUI iOS app is frozen because there's no Mac to build it (see
-the end of this file). Phones get the web app as an installable PWA
-first, then an Expo app built in the cloud.
+There's no Mac, so the original SwiftUI app was removed (it's still in
+the git history). Phones get the web app as an installable PWA first,
+then an Expo app built in the cloud.
 
 The plan is in four stages. Each one leaves the app in a usable state.
 
@@ -28,7 +28,7 @@ The plan is in four stages. Each one leaves the app in a usable state.
 - [x] Rate limiting on login, sign up, search, sending and chat changes.
 - [x] WebSocket logs in with its first message, not a token in the URL.
 - [x] Sign out everywhere.
-- [x] Removed the Firebase stub.
+- [x] Removed the Firebase stub (and later the whole SwiftUI app).
 
 Carried over to later:
 
@@ -70,7 +70,7 @@ Ideas for later, all small:
 
 - [ ] One `docker compose up` that runs the server and serves the built
       web app from the same origin.
-- [ ] Deploy (Fly.io or Render, both covered in `EmberServer/README.md`)
+- [ ] Deploy (Fly.io or Render, see Deploying in the README)
       with HTTPS and a real `JWT_SECRET`.
 - [ ] **Make the web app an installable PWA.** This is the way onto
       iPhones without a Mac: add a manifest and a service worker, then
@@ -119,14 +119,3 @@ Only worth doing once real people use it.
         Build, and submit with EAS Submit (the App Store needs an Apple
         Developer account, 99 USD a year)
       - real push notifications through Expo's push service
-
-## The SwiftUI app (`Ember/`)
-
-There's no Mac on the horizon, so the SwiftUI app is **frozen**. It
-stays in the repo as a reference for the iOS design (amber dashed
-bubbles, the volatile pill, the clearance sheet), but it won't be built
-or kept in sync with the server. Phones are covered first by the PWA
-(stage 2) and then by the Expo app (stage 4). It no longer matches the
-server either (it still puts the token in the WebSocket URL, which the
-server now refuses). If it's still unused once the Expo app ships,
-delete it.

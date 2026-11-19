@@ -1,4 +1,4 @@
-// Wire types, matching what EmberServer sends (see EmberServer/README.md).
+// Wire types, matching what EmberServer sends (see API.md).
 
 export interface Profile {
   id: string;
