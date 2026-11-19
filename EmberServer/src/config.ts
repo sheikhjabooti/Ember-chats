@@ -45,5 +45,8 @@ export const config = {
    * reconnect after a dropped connection without losing the chat.
    */
   breakoutEmptyGraceSeconds: numberFromEnv("BREAKOUT_EMPTY_GRACE_SECONDS", 60),
+  /** How long other participants have to decline a "Keep chat" request. */
+  keepVoteSeconds: numberFromEnv("KEEP_VOTE_SECONDS", 15),
+  rateLimitsEnabled: process.env.RATE_LIMITS !== "off",
   corsOrigin: process.env.CORS_ORIGIN ?? "*",
 };

@@ -1,60 +1,62 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { Server } from "http";
 import { randomUUID } from "crypto";
-import { verifyToken } from "../services/auth";
+import { authenticate } from "../services/auth";
 import { registerConnection, unregisterConnection, sendToUsers } from "./hub";
 import { volatileChatStore, VolatileMessage } from "../services/volatileChatStore";
+import { toBreakoutJson } from "../services/breakoutLifecycle";
+import { MAX_MESSAGE_LENGTH } from "../services/schemas";
+import { RateLimiter } from "../middleware/rateLimit";
+import { config } from "../config";
 
 interface ClientMessage {
-  type: "breakout:subscribe" | "breakout:unsubscribe" | "breakout:send" | "ping";
+  type: "auth" | "breakout:subscribe" | "breakout:unsubscribe" | "breakout:send" | "breakout:typing" | "ping";
+  token?: string;
   chatId?: string;
   text?: string;
+  isTyping?: boolean;
 }
 
-const MAX_MESSAGE_LENGTH = 4000;
+const AUTH_TIMEOUT_MS = 5000;
 
 /**
- * One WebSocket connection per client, authenticated via `?token=` in
- * the URL (a JWT from POST /auth/login). Handles:
- *  - registering the connection so REST routes can push persisted-chat
- *    messages/typing events to this user (see routes/chats.ts)
- *  - subscribing to a breakout chat's live event stream, bridging
- *    `VolatileChatStore` events straight to the socket
- *  - presence: a subscription counts as "viewing" the breakout, and when
- *    nobody is viewing it any more the store starts the clearance
- *    countdown after a grace period
- *  - sending breakout messages directly over the socket (lower latency
- *    than the REST fallback in routes/breakouts.ts)
+ * One WebSocket connection per client. Protocol:
+ *
+ *  1. Connect to /ws, then send `{"type":"auth","token":"<JWT>"}` as the
+ *     first message (within 5 seconds). The server answers
+ *     `{"type":"ready","userId"}` or closes with code 4401. The token is
+ *     not put in the URL because URLs end up in proxy and server logs.
+ *  2. After that the socket receives every event for the user's chats,
+ *     and can subscribe to breakouts (`breakout:subscribe`), send in them
+ *     (`breakout:send`) and show typing (`breakout:typing`).
+ *
+ * A breakout subscription also counts as "viewing" it. When nobody is
+ * viewing any more, the store starts the clearance countdown after a
+ * grace period.
  */
 export function attachWebSocketServer(server: Server): WebSocketServer {
-  const wss = new WebSocketServer({ server, path: "/ws" });
+  const wss = new WebSocketServer({ server, path: "/ws", maxPayload: 64 * 1024 });
 
-  wss.on("connection", (socket: WebSocket, request) => {
-    const url = new URL(request.url ?? "", "http://localhost");
-    const token = url.searchParams.get("token");
-    let userId: string;
-    try {
-      if (!token) throw new Error("missing token");
-      userId = verifyToken(token).sub;
-    } catch {
-      socket.close(4401, "Unauthorized");
-      return;
-    }
-
-    registerConnection(userId, socket);
+  wss.on("connection", (socket: WebSocket) => {
+    let userId: string | null = null;
+    const breakoutUnsubscribers = new Map<string, () => void>();
+    // 20 breakout messages per 10 seconds per connection.
+    const sendLimiter = new RateLimiter(20, 10_000);
 
     const send = (payload: unknown) => {
       if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
     };
 
-    const breakoutUnsubscribers = new Map<string, () => void>();
+    const authTimer = setTimeout(() => {
+      if (!userId) socket.close(4401, "Authenticate first");
+    }, AUTH_TIMEOUT_MS);
 
     const leaveBreakout = (chatId: string) => {
       const unsubscribe = breakoutUnsubscribers.get(chatId);
       if (!unsubscribe) return;
       unsubscribe();
       breakoutUnsubscribers.delete(chatId);
-      volatileChatStore.viewerLeft(chatId, userId);
+      if (userId) volatileChatStore.viewerLeft(chatId, userId);
     };
 
     socket.on("message", (raw) => {
@@ -65,6 +67,20 @@ export function attachWebSocketServer(server: Server): WebSocketServer {
         return;
       }
 
+      if (!userId) {
+        const authed = parsed.type === "auth" && typeof parsed.token === "string" ? authenticate(parsed.token) : null;
+        if (!authed) {
+          socket.close(4401, "Unauthorized");
+          return;
+        }
+        userId = authed;
+        clearTimeout(authTimer);
+        registerConnection(userId, socket);
+        send({ type: "ready", userId });
+        return;
+      }
+      const me = userId;
+
       switch (parsed.type) {
         case "ping":
           send({ type: "pong" });
@@ -74,7 +90,7 @@ export function attachWebSocketServer(server: Server): WebSocketServer {
           const chatId = parsed.chatId;
           if (!chatId || breakoutUnsubscribers.has(chatId)) return;
           const meta = volatileChatStore.chat(chatId);
-          if (!meta || !meta.participantIds.includes(userId)) {
+          if (!meta || !meta.participantIds.includes(me)) {
             send({ type: "error", chatId, message: "Cannot subscribe to that breakout chat" });
             return;
           }
@@ -87,17 +103,22 @@ export function attachWebSocketServer(server: Server): WebSocketServer {
           send({
             type: "breakout:snapshot",
             chatId,
-            breakout: { ...meta },
+            breakout: toBreakoutJson(meta),
             messages: volatileChatStore.messages(chatId),
           });
           // Joining can cancel an "everyone left" countdown, which emits
           // `warningCancelled`, so do it after the snapshot is sent.
-          volatileChatStore.viewerJoined(chatId, userId);
+          volatileChatStore.viewerJoined(chatId, me);
           break;
         }
 
         case "breakout:unsubscribe": {
           if (parsed.chatId) leaveBreakout(parsed.chatId);
+          break;
+        }
+
+        case "breakout:typing": {
+          if (parsed.chatId) volatileChatStore.typing(parsed.chatId, me, Boolean(parsed.isTyping));
           break;
         }
 
@@ -108,15 +129,20 @@ export function attachWebSocketServer(server: Server): WebSocketServer {
             send({ type: "error", chatId: parsed.chatId, message: `Message longer than ${MAX_MESSAGE_LENGTH} characters` });
             return;
           }
+          if (config.rateLimitsEnabled && sendLimiter.hit("send") > 0) {
+            send({ type: "error", chatId: parsed.chatId, message: "You're sending messages too fast. Slow down a little." });
+            return;
+          }
           const meta = volatileChatStore.chat(parsed.chatId);
-          if (!meta || !meta.participantIds.includes(userId)) return;
+          if (!meta || !meta.participantIds.includes(me)) return;
           const message: VolatileMessage = {
             id: randomUUID(),
             chatId: parsed.chatId,
-            senderId: userId,
+            senderId: me,
             text,
             sentAt: new Date().toISOString(),
           };
+          volatileChatStore.typing(parsed.chatId, me, false);
           volatileChatStore.append(parsed.chatId, message);
           break;
         }
@@ -124,7 +150,8 @@ export function attachWebSocketServer(server: Server): WebSocketServer {
     });
 
     socket.on("close", () => {
-      unregisterConnection(userId, socket);
+      clearTimeout(authTimer);
+      if (userId) unregisterConnection(userId, socket);
       for (const chatId of [...breakoutUnsubscribers.keys()]) leaveBreakout(chatId);
     });
   });

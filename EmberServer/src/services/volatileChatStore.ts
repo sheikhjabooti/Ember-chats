@@ -33,7 +33,26 @@ export type VolatileChatEvent =
   | { type: "expiryWarning"; chatId: string; secondsRemaining: number; reason: WarningReason }
   | { type: "warningCancelled"; chatId: string }
   | { type: "purged"; chatId: string }
-  | { type: "promoted"; chatId: string };
+  | { type: "promoted"; chatId: string }
+  | { type: "typing"; chatId: string; userId: string; isTyping: boolean }
+  | { type: "keepRequested"; chatId: string; requestedBy: string; secondsRemaining: number; approvedBy: string[] }
+  | { type: "keepDeclined"; chatId: string; declinedBy: string }
+  | { type: "keepFailed"; chatId: string };
+
+export type KeepRequestResult =
+  | { status: "pending"; secondsRemaining: number }
+  | { status: "kept"; messageCount?: number }
+  | { status: "missing" };
+
+interface KeepVote {
+  requestedBy: string;
+  approvals: Set<string>;
+  secondsRemaining: number;
+  interval: NodeJS.Timeout;
+  handler: PromotionHandler;
+  /** The countdown that was running when the vote started, to resume if it's declined. */
+  pausedReason?: WarningReason;
+}
 
 export type PromotionHandler = (
   messages: VolatileMessage[],
@@ -76,6 +95,7 @@ export class VolatileChatStore extends EventEmitter {
   private viewers = new Map<string, Map<string, number>>();
   private emptyTimers = new Map<string, NodeJS.Timeout>();
   private promoting = new Set<string>();
+  private keepVotes = new Map<string, KeepVote>();
 
   private readonly warningWindowSeconds: number;
   private readonly emptyGraceSeconds: number;
@@ -191,6 +211,114 @@ export class VolatileChatStore extends EventEmitter {
     }
   }
 
+  /** Relays a typing indicator to everyone watching. Nothing is stored. */
+  typing(chatId: string, userId: string, isTyping: boolean): void {
+    if (!this.chatsById.get(chatId)?.participantIds.includes(userId)) return;
+    this.emitChatEvent(chatId, { type: "typing", chatId, userId, isTyping });
+  }
+
+  keepVoteFor(chatId: string): { requestedBy: string; approvedBy: string[]; secondsRemaining: number } | undefined {
+    const vote = this.keepVotes.get(chatId);
+    return vote && { requestedBy: vote.requestedBy, approvedBy: [...vote.approvals], secondsRemaining: vote.secondsRemaining };
+  }
+
+  /**
+   * "Keep chat" with consent. Keeping saves everyone's words, so the
+   * other participants get `voteSeconds` to decline. Any decline cancels
+   * it; silence counts as agreement, as does everyone approving early.
+   * While the vote runs, any clearance countdown is paused. If a vote is
+   * already running, asking again counts as approving it.
+   */
+  async requestKeep(chatId: string, userId: string, handler: PromotionHandler, voteSeconds: number): Promise<KeepRequestResult> {
+    const meta = this.chatsById.get(chatId);
+    if (!meta) return { status: "missing" };
+
+    if (this.keepVotes.has(chatId)) {
+      await this.respondToKeep(chatId, userId, true);
+      const vote = this.keepVotes.get(chatId);
+      if (vote) return { status: "pending", secondsRemaining: vote.secondsRemaining };
+      return this.chatsById.has(chatId) ? { status: "pending", secondsRemaining: 0 } : { status: "kept" };
+    }
+
+    const others = meta.participantIds.filter((id) => id !== userId);
+    if (others.length === 0 || voteSeconds <= 0) {
+      const history = await this.promote(chatId, handler);
+      return { status: "kept", messageCount: history.length };
+    }
+
+    const pausedReason = this.warningReasons.get(chatId);
+    if (pausedReason) this.cancelWarning(chatId);
+    this.clearEmptyTimer(chatId);
+
+    const vote: KeepVote = {
+      requestedBy: userId,
+      approvals: new Set([userId]),
+      secondsRemaining: voteSeconds,
+      handler,
+      pausedReason,
+      interval: setInterval(() => {
+        vote.secondsRemaining -= 1;
+        if (vote.secondsRemaining > 0) this.emitKeepRequested(chatId, vote);
+        else void this.finishKeepVote(chatId);
+      }, 1000),
+    };
+    this.keepVotes.set(chatId, vote);
+    this.emitKeepRequested(chatId, vote);
+    return { status: "pending", secondsRemaining: voteSeconds };
+  }
+
+  /** A participant answers a pending keep request. */
+  async respondToKeep(chatId: string, userId: string, allow: boolean): Promise<void> {
+    const vote = this.keepVotes.get(chatId);
+    const meta = this.chatsById.get(chatId);
+    if (!vote || !meta || !meta.participantIds.includes(userId)) return;
+
+    if (!allow) {
+      this.stopKeepVote(chatId);
+      this.emitChatEvent(chatId, { type: "keepDeclined", chatId, declinedBy: userId });
+      // Pick up where things were: resume the paused countdown, or watch for an empty room again.
+      if (vote.pausedReason) this.beginWarningWindow(chatId, vote.pausedReason);
+      else if (this.viewerCount(chatId) === 0) this.scheduleEmptyCheck(chatId);
+      return;
+    }
+
+    vote.approvals.add(userId);
+    if (meta.participantIds.every((id) => vote.approvals.has(id))) {
+      await this.finishKeepVote(chatId);
+    } else {
+      this.emitKeepRequested(chatId, vote);
+    }
+  }
+
+  private emitKeepRequested(chatId: string, vote: KeepVote) {
+    this.emitChatEvent(chatId, {
+      type: "keepRequested",
+      chatId,
+      requestedBy: vote.requestedBy,
+      secondsRemaining: vote.secondsRemaining,
+      approvedBy: [...vote.approvals],
+    });
+  }
+
+  private stopKeepVote(chatId: string) {
+    const vote = this.keepVotes.get(chatId);
+    if (vote) clearInterval(vote.interval);
+    this.keepVotes.delete(chatId);
+  }
+
+  private async finishKeepVote(chatId: string): Promise<void> {
+    const vote = this.keepVotes.get(chatId);
+    if (!vote) return;
+    this.stopKeepVote(chatId);
+    try {
+      await this.promote(chatId, vote.handler);
+    } catch (err) {
+      console.error(`[breakouts] failed to keep ${chatId}`, err);
+      this.emitChatEvent(chatId, { type: "keepFailed", chatId });
+      if (vote.pausedReason) this.beginWarningWindow(chatId, vote.pausedReason);
+    }
+  }
+
   /**
    * Hands the full history to `handler` (expected to write to the DB),
    * then purges memory. Callable at any point, not just during the
@@ -226,6 +354,7 @@ export class VolatileChatStore extends EventEmitter {
     this.warningIntervals.delete(chatId);
     this.warningReasons.delete(chatId);
     this.viewers.delete(chatId);
+    this.stopKeepVote(chatId);
     this.emitChatEvent(chatId, { type: "purged", chatId });
     this.removeAllListeners(`chat:${chatId}`);
   }
@@ -289,6 +418,12 @@ export class VolatileChatStore extends EventEmitter {
 
   private beginWarningWindow(chatId: string, reason: WarningReason): void {
     if (!this.chatsById.has(chatId) || this.warningIntervals.has(chatId)) return;
+    // A keep vote in progress holds off the countdown; it resumes if the vote fails.
+    if (this.keepVotes.has(chatId)) {
+      const vote = this.keepVotes.get(chatId)!;
+      if (reason === "ended" || !vote.pausedReason) vote.pausedReason = reason;
+      return;
+    }
     this.clearTimer(this.expiryTimers, chatId);
 
     let remaining = this.warningWindowSeconds;

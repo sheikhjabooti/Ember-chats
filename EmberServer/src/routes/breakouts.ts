@@ -1,14 +1,21 @@
 import { Router } from "express";
 import { randomUUID } from "crypto";
 import { requireAuth, AuthedRequest } from "../middleware/requireAuth";
-import { sendMessageSchema } from "../services/schemas";
-import { volatileChatStore, VolatileMessage, VolatileChatMeta } from "../services/volatileChatStore";
-import { toBreakoutJson } from "../services/breakoutLifecycle";
-import { sendToUsers } from "../ws/hub";
-import { db } from "../db/database";
-import { createChat, createMessage, updateChatLastMessage, findChatById, toChatJson } from "../db/chatsRepo";
+import { rateLimit } from "../middleware/rateLimit";
+import { keepResponseSchema, sendMessageSchema } from "../services/schemas";
+import { volatileChatStore, VolatileMessage } from "../services/volatileChatStore";
+import { saveBreakout, toBreakoutJson } from "../services/breakoutLifecycle";
+import { listAllKeptBreakouts, toChatJson } from "../db/chatsRepo";
+import { config } from "../config";
 
 export const breakoutsRouter = Router();
+
+const sendLimit = rateLimit("send", 30, 10);
+
+/** Every breakout you were in that someone kept. Shown in their own list, apart from chats. */
+breakoutsRouter.get("/kept", requireAuth, async (req: AuthedRequest, res) => {
+  return res.json(listAllKeptBreakouts(req.userId!).map((c) => toChatJson(c, req.userId)));
+});
 
 breakoutsRouter.get("/:breakoutId", requireAuth, async (req: AuthedRequest, res) => {
   const meta = requireBreakoutMembership(req, res);
@@ -22,7 +29,7 @@ breakoutsRouter.get("/:breakoutId/messages", requireAuth, async (req: AuthedRequ
   return res.json(volatileChatStore.messages(meta.id));
 });
 
-breakoutsRouter.post("/:breakoutId/messages", requireAuth, async (req: AuthedRequest, res) => {
+breakoutsRouter.post("/:breakoutId/messages", requireAuth, sendLimit, async (req: AuthedRequest, res) => {
   const meta = requireBreakoutMembership(req, res);
   if (!meta) return;
 
@@ -44,66 +51,43 @@ breakoutsRouter.post("/:breakoutId/messages", requireAuth, async (req: AuthedReq
 });
 
 /**
- * Writes a breakout and its whole history to the database in one
- * transaction, so a failure halfway through can never leave a
- * half-saved chat behind.
+ * "Keep this chat". Starts a vote: the others have KEEP_VOTE_SECONDS to
+ * decline, and it's saved unless someone does. 202 while the vote runs,
+ * 200 once it's saved. Asking during someone else's vote approves it.
  */
-const persistBreakout = db.transaction((messages: VolatileMessage[], chatMeta: VolatileChatMeta) => {
-  createChat({
-    id: chatMeta.id,
-    kind: "breakout",
-    parentChatId: chatMeta.parentChatId,
-    isPersisted: true,
-    createdByUserId: chatMeta.createdByUserId,
-    createdAt: new Date(chatMeta.createdAt),
-    participantIds: chatMeta.participantIds,
-  });
-  for (const m of messages) {
-    createMessage({
-      id: m.id,
-      chatId: chatMeta.id,
-      senderId: m.senderId,
-      text: m.text,
-      sentAt: new Date(m.sentAt),
-    });
-  }
-  if (messages.length > 0) {
-    const last = messages[messages.length - 1];
-    updateChatLastMessage(chatMeta.id, last.text?.slice(0, 120) ?? null, new Date(last.sentAt));
-  }
-});
-
-/** "Keep this chat": promotes the breakout to a persisted chat. */
 breakoutsRouter.post("/:breakoutId/keep", requireAuth, async (req: AuthedRequest, res) => {
   const meta = requireBreakoutMembership(req, res);
   if (!meta) return;
 
-  let persisted: VolatileMessage[];
   try {
-    persisted = await volatileChatStore.promote(meta.id, async (messages, chatMeta) => {
-      persistBreakout(messages, chatMeta);
-    });
+    const result = await volatileChatStore.requestKeep(meta.id, req.userId!, saveBreakout, config.keepVoteSeconds);
+    if (result.status === "missing") return res.status(404).json({ error: "Breakout chat not found (it may have already been cleared)" });
+    if (result.status === "pending") return res.status(202).json({ id: meta.id, status: "pending", secondsRemaining: result.secondsRemaining });
+    return res.json({ id: meta.id, status: "kept", isPersisted: true, messageCount: result.messageCount });
   } catch (err) {
-    // The store only purges after the handler succeeds, so the chat is
-    // still live in memory and the user can try again.
+    // The store only purges after saving succeeds, so the chat is still live.
     console.error(`[breakouts] failed to keep ${meta.id}`, err);
     return res.status(500).json({ error: "Could not save this chat. It is still open, please try again." });
   }
-
-  const chat = findChatById(meta.id);
-  sendToUsers(meta.participantIds, {
-    type: "breakout:promoted",
-    chatId: meta.id,
-    parentChatId: meta.parentChatId,
-    chat: chat ? toChatJson(chat) : undefined,
-  });
-  return res.json({ id: meta.id, isPersisted: true, messageCount: persisted.length });
 });
 
-/** "End Breakout": starts the clearance warning window for everyone. */
+/** Allow or decline someone else's keep request. */
+breakoutsRouter.post("/:breakoutId/keep/respond", requireAuth, async (req: AuthedRequest, res) => {
+  const meta = requireBreakoutMembership(req, res);
+  if (!meta) return;
+  const parsed = keepResponseSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (!volatileChatStore.keepVoteFor(meta.id)) return res.status(409).json({ error: "Nobody is asking to keep this chat right now" });
+
+  await volatileChatStore.respondToKeep(meta.id, req.userId!, parsed.data.allow);
+  return res.status(204).end();
+});
+
+/** "End Breakout": starts the clearance warning window for everyone. Ending during a keep vote declines it. */
 breakoutsRouter.post("/:breakoutId/end", requireAuth, async (req: AuthedRequest, res) => {
   const meta = requireBreakoutMembership(req, res);
   if (!meta) return;
+  if (volatileChatStore.keepVoteFor(meta.id)) await volatileChatStore.respondToKeep(meta.id, req.userId!, false);
   volatileChatStore.requestEnd(meta.id);
   return res.status(204).end();
 });

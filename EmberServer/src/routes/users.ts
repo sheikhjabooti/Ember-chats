@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { requireAuth, AuthedRequest } from "../middleware/requireAuth";
+import { rateLimit } from "../middleware/rateLimit";
 import { updateUser, searchUsers, findById, toProfile, toPublicUser } from "../db/usersRepo";
 
 export const usersRouter = Router();
@@ -26,7 +27,7 @@ usersRouter.patch("/me", requireAuth, async (req: AuthedRequest, res) => {
  * email or phone, or by display name prefix. Returns profiles only, no
  * contact details.
  */
-usersRouter.get("/search", requireAuth, async (req: AuthedRequest, res) => {
+usersRouter.get("/search", requireAuth, rateLimit("search", 30, 60), async (req: AuthedRequest, res) => {
   const q = typeof req.query.q === "string" ? req.query.q : "";
   if (q.trim().length < 2) {
     return res.status(400).json({ error: "Query must be at least 2 characters" });

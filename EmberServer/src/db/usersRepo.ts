@@ -12,6 +12,7 @@ export interface UserRow {
   tombstone_logging_enabled: number;
   notifications_enabled: number;
   fcm_token: string | null;
+  token_version: number;
   created_at: string;
 }
 

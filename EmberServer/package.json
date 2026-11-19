@@ -8,7 +8,7 @@
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc -p tsconfig.json && node -e \"require('fs').copyFileSync('src/db/schema.sql','dist/db/schema.sql')\"",
     "start": "node dist/index.js",
-    "test": "cross-env NODE_ENV=test BREAKOUT_WARNING_WINDOW_SECONDS=1 BREAKOUT_EMPTY_GRACE_SECONDS=0.2 DATABASE_FILE=:memory: node --test --test-concurrency=1 --require ts-node/register \"test/**/*.test.ts\""
+    "test": "cross-env NODE_ENV=test RATE_LIMITS=off KEEP_VOTE_SECONDS=1 BREAKOUT_WARNING_WINDOW_SECONDS=1 BREAKOUT_EMPTY_GRACE_SECONDS=0.2 DATABASE_FILE=:memory: node --test --test-concurrency=1 --require ts-node/register \"test/**/*.test.ts\""
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

@@ -209,3 +209,73 @@ test("a new message cancels an inactivity countdown but not an explicit end", as
   assert.equal(store.warningReason(meta.id), "ended");
   store.purge(meta.id);
 });
+
+test("keep vote: silence counts as yes once the vote runs out", async () => {
+  const store = makeStore();
+  const meta = makeMeta();
+  store.register(meta);
+  store.viewerJoined(meta.id, "u1");
+  let saved = 0;
+  const result = await store.requestKeep(meta.id, "u1", async () => void saved++, 1);
+  assert.equal(result.status, "pending");
+  assert.deepEqual(store.keepVoteFor(meta.id)?.approvedBy, ["u1"]);
+  await sleep(1200);
+  assert.equal(saved, 1);
+  assert.equal(store.chat(meta.id), undefined);
+});
+
+test("keep vote: everyone approving saves at once", async () => {
+  const store = makeStore();
+  const meta = makeMeta();
+  store.register(meta);
+  store.viewerJoined(meta.id, "u1");
+  let saved = 0;
+  await store.requestKeep(meta.id, "u1", async () => void saved++, 30);
+  await store.respondToKeep(meta.id, "u2", true);
+  assert.equal(saved, 1);
+  assert.equal(store.chat(meta.id), undefined);
+});
+
+test("keep vote: a decline cancels it and resumes the paused countdown", async () => {
+  const store = makeStore();
+  const meta = makeMeta();
+  store.register(meta);
+  store.viewerJoined(meta.id, "u1");
+  const events = record(store, meta.id);
+
+  store.requestEnd(meta.id);
+  await store.requestKeep(meta.id, "u2", async () => assert.fail("must not save"), 30);
+  assert.equal(store.warningReason(meta.id), undefined, "countdown paused during the vote");
+
+  await store.respondToKeep(meta.id, "u1", false);
+  assert.ok(events.some((e) => e.type === "keepDeclined"));
+  assert.equal(store.keepVoteFor(meta.id), undefined);
+  assert.equal(store.warningReason(meta.id), "ended", "countdown resumed");
+  store.purge(meta.id);
+});
+
+test("keep vote: countdowns that come due during the vote wait for it", async () => {
+  const store = makeStore();
+  const meta = makeMeta();
+  store.register(meta);
+  store.viewerJoined(meta.id, "u1");
+  await store.requestKeep(meta.id, "u1", async () => {}, 30);
+  store.viewerLeft(meta.id, "u1");
+  await sleep(300); // past the empty grace period
+  assert.equal(store.warningReason(meta.id), undefined);
+  assert.ok(store.chat(meta.id));
+  await store.respondToKeep(meta.id, "u2", false);
+  assert.equal(store.warningReason(meta.id), "empty");
+  store.purge(meta.id);
+});
+
+test("typing is relayed for participants only", () => {
+  const store = makeStore();
+  const meta = makeMeta();
+  store.register(meta);
+  const events = record(store, meta.id);
+  store.typing(meta.id, "u1", true);
+  store.typing(meta.id, "stranger", true);
+  assert.deepEqual(events, [{ type: "typing", chatId: meta.id, userId: "u1", isTyping: true }]);
+  store.purge(meta.id);
+});

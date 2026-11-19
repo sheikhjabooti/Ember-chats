@@ -31,3 +31,8 @@ export function sendToUsers(userIds: string[], payload: unknown): void {
 export function isUserOnline(userId: string): boolean {
   return (connectionsByUser.get(userId)?.size ?? 0) > 0;
 }
+
+/** Closes every open socket for a user (used by "sign out everywhere"). */
+export function closeUserConnections(userId: string): void {
+  for (const socket of connectionsByUser.get(userId) ?? []) socket.close(4401, "Signed out");
+}
