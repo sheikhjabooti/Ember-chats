@@ -24,6 +24,7 @@ export function toBreakoutJson(meta: VolatileChatMeta) {
     createdAt: meta.createdAt,
     createdByUserId: meta.createdByUserId,
     expiresAt: meta.expiresAt,
+    quotedMessage: meta.quotedMessage ?? null,
     keepVote: volatileChatStore.keepVoteFor(meta.id) ?? null,
   };
 }
@@ -44,6 +45,17 @@ const persistBreakout = db.transaction((messages: VolatileMessage[], chatMeta: V
     createdAt: new Date(chatMeta.createdAt),
     participantIds: chatMeta.participantIds,
   });
+  const quote = chatMeta.quotedMessage;
+  if (quote) {
+    const who = findById(quote.senderId)?.display_name ?? "someone";
+    createMessage({
+      chatId: chatMeta.id,
+      senderId: chatMeta.createdByUserId,
+      kind: "system",
+      text: `Started from ${who}'s message: "${quote.text.length > 140 ? `${quote.text.slice(0, 140)}…` : quote.text}"`,
+      sentAt: new Date(chatMeta.createdAt),
+    });
+  }
   for (const m of messages) {
     createMessage({ id: m.id, chatId: chatMeta.id, senderId: m.senderId, text: m.text, sentAt: new Date(m.sentAt) });
   }

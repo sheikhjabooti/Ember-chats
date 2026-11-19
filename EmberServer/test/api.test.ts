@@ -372,6 +372,35 @@ test("breakouts start only from groups, and only with members", async () => {
   assert.equal(fromDm.status, 400);
 });
 
+test("a breakout can start from a message, and keeps the quote when saved", async () => {
+  const alice = await registerUser("Alice");
+  const bob = await registerUser("Bob");
+  const group = await makeGroup(alice, [bob]);
+  const source = (await api("POST", `/chats/${group.id}/messages`, bob, { text: "should we get Carol a gift?" })).body;
+
+  const dm = (await api("POST", "/chats", alice, { kind: "direct", participantIds: [bob.id] })).body;
+  const elsewhere = (await api("POST", `/chats/${dm.id}/messages`, alice, { text: "hi" })).body;
+  const wrong = await api("POST", `/chats/${group.id}/breakout`, alice, { participantIds: [bob.id], fromMessageId: elsewhere.id });
+  assert.equal(wrong.status, 400);
+
+  const res = await api("POST", `/chats/${group.id}/breakout`, alice, { participantIds: [bob.id], fromMessageId: source.id });
+  assert.equal(res.status, 201);
+  assert.deepEqual(res.body.quotedMessage, { id: source.id, senderId: bob.id, text: source.text, sentAt: source.sentAt });
+
+  const bobSocket = await TestSocket.open(bob);
+  bobSocket.send({ type: "breakout:subscribe", chatId: res.body.id });
+  const snapshot = await bobSocket.waitFor((f) => f.type === "breakout:snapshot");
+  assert.equal(snapshot.breakout.quotedMessage.text, "should we get Carol a gift?");
+
+  await Promise.all([
+    api("POST", `/breakouts/${res.body.id}/keep`, alice),
+    api("POST", `/breakouts/${res.body.id}/keep`, bob),
+  ]);
+  const history = (await api("GET", `/chats/${res.body.id}/messages`, alice)).body;
+  assert.equal(history[0].kind, "system");
+  assert.equal(history[0].text, `Started from Bob's message: "should we get Carol a gift?"`);
+});
+
 test("replies, edits, deletes and reactions reach everyone live", async () => {
   const alice = await registerUser("Alice");
   const bob = await registerUser("Bob");

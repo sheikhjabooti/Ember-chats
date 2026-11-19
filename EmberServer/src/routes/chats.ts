@@ -14,7 +14,7 @@ import {
 } from "../services/schemas";
 import { sendToUsers } from "../ws/hub";
 import { sendPush } from "../services/push";
-import { volatileChatStore } from "../services/volatileChatStore";
+import { volatileChatStore, VolatileChatMeta } from "../services/volatileChatStore";
 import { attachBreakoutLifecycle, toBreakoutJson } from "../services/breakoutLifecycle";
 import { config } from "../config";
 import {
@@ -310,9 +310,19 @@ chatsRouter.post("/:chatId/breakout", requireAuth, writeLimit, async (req: Authe
   }
   if (participantIds.length < 2) return res.status(400).json({ error: "Invite at least one other person" });
 
+  // "Reply in a breakout": the breakout opens with that message quoted.
+  let quotedMessage: VolatileChatMeta["quotedMessage"];
+  if (parsed.data.fromMessageId) {
+    const source = findMessageInChat(parentChat.id, parsed.data.fromMessageId);
+    if (!source || source.kind !== "text" || source.deletion_state !== "none") {
+      return res.status(400).json({ error: "You can only start a breakout from a message in this chat" });
+    }
+    quotedMessage = { id: source.id, senderId: source.sender_id, text: source.text ?? "", sentAt: source.sent_at };
+  }
+
   const now = new Date();
   const inactivitySeconds = config.breakoutDefaultInactivitySeconds;
-  const meta = {
+  const meta: VolatileChatMeta = {
     id: randomUUID(),
     parentChatId: parentChat.id,
     participantIds,
@@ -320,6 +330,7 @@ chatsRouter.post("/:chatId/breakout", requireAuth, writeLimit, async (req: Authe
     createdAt: now.toISOString(),
     inactivityTimeoutSeconds: inactivitySeconds,
     expiresAt: new Date(now.getTime() + inactivitySeconds * 1000).toISOString(),
+    quotedMessage,
   };
   volatileChatStore.register(meta);
   attachBreakoutLifecycle(meta);

@@ -37,6 +37,8 @@ export const reactionSchema = z.object({
 
 export const startBreakoutSchema = z.object({
   participantIds: z.array(z.string()).min(1),
+  /** Start from this message in the group; the breakout opens with it quoted. */
+  fromMessageId: z.string().optional(),
 });
 
 export const updateChatSchema = z.object({

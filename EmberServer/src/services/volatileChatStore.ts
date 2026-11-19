@@ -17,6 +17,8 @@ export interface VolatileChatMeta {
   createdAt: string;
   inactivityTimeoutSeconds: number;
   expiresAt: string;
+  /** Set when the breakout was started from a message ("Reply in a breakout"). */
+  quotedMessage?: { id: string; senderId: string; text: string; sentAt: string };
 }
 
 /**
