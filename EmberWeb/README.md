@@ -18,11 +18,13 @@ built app is hosted on a different origin than the server, set
 | File                               | Job                                                                      |
 |------------------------------------|--------------------------------------------------------------------------|
 | `src/api.ts`                       | Typed REST client; turns server errors into readable messages            |
-| `src/socket.ts`                    | The WebSocket: reconnects with backoff, re-subscribes open breakouts     |
+| `src/socket.ts`                    | The WebSocket: logs in with its first message, reconnects with backoff, re-subscribes open breakouts |
 | `src/people.ts`                    | Caches profiles so ids render as names                                   |
-| `src/components/Workspace.tsx`     | Signed-in shell: chat list, live events, invites, unread dots            |
-| `src/components/ChatPane.tsx`      | A saved chat: history, sending, typing, breakout strip                   |
-| `src/components/BreakoutPane.tsx`  | A live breakout, fully driven by server events (snapshot, countdown, kept, cleared) |
+| `src/components/Workspace.tsx`     | Signed-in shell: Chats and Kept lists, live events, invites, unread counts |
+| `src/components/ChatPane.tsx`      | A saved chat: history, replies, edits, reactions, receipts, typing       |
+| `src/components/Messages.tsx`      | Message list (system messages, quotes, reactions, actions menu) and composer |
+| `src/components/GroupInfoDialog.tsx` | Rename, members, add and remove, leave                                 |
+| `src/components/BreakoutPane.tsx`  | A live breakout, fully driven by server events (snapshot, countdown, keep vote, kept, cleared) |
 
 The breakout view runs no timers of its own. It shows whatever the server
 says: `expiryWarning` (with a `reason` of inactivity, empty or ended),

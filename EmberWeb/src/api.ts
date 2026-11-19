@@ -1,4 +1,4 @@
-import type { BreakoutsForChat, Breakout, Chat, Me, Message, Profile } from "./types";
+import type { Breakout, Chat, Me, Message, Profile } from "./types";
 
 const BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? "/api";
 
@@ -75,6 +75,7 @@ export const api = {
     request<AuthResponse>("POST", "/auth/register", { email, password, displayName }),
   login: (email: string, password: string) => request<AuthResponse>("POST", "/auth/login", { email, password }),
   me: () => request<Me>("GET", "/auth/me"),
+  logoutEverywhere: () => request<void>("POST", "/auth/logout-all", {}),
   updateMe: (fields: Partial<Pick<Me, "displayName" | "statusMessage" | "tombstoneLoggingEnabled" | "notificationsEnabled">>) =>
     request<Me>("PATCH", "/users/me", fields),
 
@@ -85,17 +86,32 @@ export const api = {
   chat: (id: string) => request<Chat>("GET", `/chats/${id}`),
   createChat: (kind: "direct" | "group", participantIds: string[], title?: string) =>
     request<Chat>("POST", "/chats", { kind, participantIds, title }),
+  renameChat: (id: string, title: string | null) => request<Chat>("PATCH", `/chats/${id}`, { title }),
+  addMembers: (id: string, userIds: string[]) => request<Chat>("POST", `/chats/${id}/participants`, { userIds }),
+  removeMember: (id: string, userId: string) => request<void>("DELETE", `/chats/${id}/participants/${userId}`),
+
   messages: (chatId: string, before?: string, limit = 30) =>
     request<Message[]>(
       "GET",
       `/chats/${chatId}/messages?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ""}`
     ),
-  sendMessage: (chatId: string, text: string) => request<Message>("POST", `/chats/${chatId}/messages`, { text }),
+  sendMessage: (chatId: string, text: string, replyToMessageId?: string) =>
+    request<Message>("POST", `/chats/${chatId}/messages`, { text, replyToMessageId }),
+  editMessage: (chatId: string, messageId: string, text: string) =>
+    request<Message>("PATCH", `/chats/${chatId}/messages/${messageId}`, { text }),
+  deleteMessage: (chatId: string, messageId: string) => request<Message>("DELETE", `/chats/${chatId}/messages/${messageId}`),
+  react: (chatId: string, messageId: string, emoji: string) =>
+    request<Message>("POST", `/chats/${chatId}/messages/${messageId}/reactions`, { emoji }),
+  markRead: (chatId: string, upToMessageId?: string) =>
+    request<{ lastReadAt: string }>("POST", `/chats/${chatId}/read`, { upToMessageId }),
   typing: (chatId: string, isTyping: boolean) => request<void>("POST", `/chats/${chatId}/typing`, { isTyping }),
 
-  breakoutsFor: (chatId: string) => request<BreakoutsForChat>("GET", `/chats/${chatId}/breakouts`),
+  activeBreakouts: (chatId: string) => request<{ active: Breakout[] }>("GET", `/chats/${chatId}/breakouts`),
+  keptBreakouts: () => request<Chat[]>("GET", "/breakouts/kept"),
   startBreakout: (chatId: string, participantIds: string[]) =>
     request<Breakout>("POST", `/chats/${chatId}/breakout`, { participantIds }),
-  keepBreakout: (id: string) => request<{ id: string; messageCount: number }>("POST", `/breakouts/${id}/keep`, {}),
+  keepBreakout: (id: string) =>
+    request<{ id: string; status: "pending" | "kept"; secondsRemaining?: number }>("POST", `/breakouts/${id}/keep`, {}),
+  respondToKeep: (id: string, allow: boolean) => request<void>("POST", `/breakouts/${id}/keep/respond`, { allow }),
   endBreakout: (id: string) => request<void>("POST", `/breakouts/${id}/end`, {}),
 };

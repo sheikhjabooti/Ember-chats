@@ -1,57 +1,42 @@
 # Ember roadmap
 
-Where things stand (November 2026): the server and web client work end to
-end. You can sign up, find people, chat in DMs and groups in real time, and
-start breakouts that count down, clear themselves, or get kept as threads.
+Where things stand (November 2026): stage 1 is done. The server and web
+client cover the everyday chat basics (replies, reactions, edits, unread
+counts, receipts, group management) and breakouts are invite only, with
+keeping decided by a vote.
 The SwiftUI iOS app is frozen because there's no Mac to build it (see
 the end of this file). Phones get the web app as an installable PWA
 first, then an Expo app built in the cloud.
 
 The plan is in four stages. Each one leaves the app in a usable state.
 
-## Stage 1: Finish the basics (next)
+## Stage 1: Finish the basics (done)
 
-Gaps you'd notice within five minutes of using it.
+- [x] Only the invitees learn a breakout exists; nothing is posted in the
+      parent chat.
+- [x] Keeping is a vote: the others get 15 seconds to decline, silence
+      counts as yes, and any decline cancels it.
+- [x] Kept breakouts have their own list instead of sitting in the chat.
+- [x] Real system messages ("Alice added Bob").
+- [x] Unread counts and "Seen" receipts that survive a reload.
+- [x] Replies, reactions, edit, delete for everyone.
+- [x] Group management: rename, add or remove people, leave, admin
+      handover.
+- [x] Typing indicators inside breakouts.
+- [x] Breakouts only from groups.
+- [x] GitHub Actions: server tests and web build on every push.
+- [x] Rate limiting on login, sign up, search, sending and chat changes.
+- [x] WebSocket logs in with its first message, not a token in the URL.
+- [x] Sign out everywhere.
+- [x] Removed the Firebase stub.
 
-**Product decisions to make first**
+Carried over to later:
 
-- [ ] **Who sees that a breakout started?** Right now everyone in the
-      parent chat gets "Alice started a breakout with Bob", including the
-      people left out. That ruins the obvious use case (planning Carol's
-      surprise party in a chat Carol is in). Options: tell only the
-      invitees, or show everyone a vague "a breakout is happening". My
-      pick: invitees only.
-- [ ] **Who can keep a breakout?** Today any one participant can save
-      everyone's words permanently. Options: anyone (current), ask the
-      others first, or everyone must agree. My pick: anyone can tap Keep,
-      the others get a 15 second "Bob wants to keep this. Allow / Decline"
-      prompt, and any Decline cancels it.
-
-**Chat features the database already has columns for**
-
-- [ ] Real system messages (a `kind` on messages) instead of posting the
-      breakout notice as if Alice typed it.
-- [ ] Unread counts and read receipts that survive a reload (`readBy` is
-      modeled, nothing writes it yet).
-- [ ] Reply to a message (`reply_to_message_id` exists).
-- [ ] Reactions (`reactions_json` exists).
-- [ ] Edit and delete for everyone (`edited_at`, `deletion_state` exist).
-- [ ] Group management: rename, add or remove people, leave a group
-      (`role` exists).
-- [ ] Typing indicator inside breakouts.
-- [ ] Hide "Start breakout" in 1:1 chats, where it means nothing.
-
-**Engineering hygiene**
-
-- [ ] GitHub Actions: run `npm test` for the server and `npm run build`
-      for the web on every push.
 - [ ] Browser tests (Playwright) for the breakout flow with two signed in
-      users.
-- [ ] Rate limiting on login, sign up, search and sending.
-- [ ] Stop putting the login token in the WebSocket URL (URLs end up in
-      logs). Authenticate with the first message instead.
-- [ ] Shorter lived tokens plus refresh, and "sign out everywhere".
-- [ ] Delete the unused Firebase stub in the iOS code.
+      users. Today the flow is covered by API level end to end tests and
+      by hand.
+- [ ] Shorter lived tokens with refresh. Tokens still last 30 days, but
+      "sign out everywhere" can now revoke them.
 
 ## Stage 2: Put it online and on phones
 
@@ -113,5 +98,7 @@ There's no Mac on the horizon, so the SwiftUI app is **frozen**. It
 stays in the repo as a reference for the iOS design (amber dashed
 bubbles, the volatile pill, the clearance sheet), but it won't be built
 or kept in sync with the server. Phones are covered first by the PWA
-(stage 2) and then by the Expo app (stage 4). If it's still unused once
-the Expo app ships, delete it.
+(stage 2) and then by the Expo app (stage 4). It no longer matches the
+server either (it still puts the token in the WebSocket URL, which the
+server now refuses). If it's still unused once the Expo app ships,
+delete it.

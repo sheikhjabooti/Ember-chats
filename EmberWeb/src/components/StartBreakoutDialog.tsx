@@ -41,8 +41,9 @@ export function StartBreakoutDialog({
     <Dialog title="Start a breakout" onClose={onClose}>
       <div className="stack">
         <p className="muted">
-          A side conversation with some people from this chat. Messages are never saved. It clears itself once
-          everyone has left, unless someone taps <strong>Keep</strong>.
+          A side conversation with some people from this chat. Only they will know it exists. Messages are never
+          saved: it clears itself once everyone has left, unless someone asks to <strong>keep</strong> it and nobody
+          says no.
         </p>
         <ul className="pick-list">
           {candidates.map((id) => (
@@ -67,7 +68,7 @@ export function StartBreakoutDialog({
             Cancel
           </button>
           <button className="volatile-btn solid" disabled={busy || selected.size === 0} onClick={start}>
-            🔥 Start with {selected.size || "…"}
+            Start with {selected.size || "…"}
           </button>
         </div>
       </div>

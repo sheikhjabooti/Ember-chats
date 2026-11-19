@@ -2,6 +2,8 @@ import { initials, shortTime } from "../format";
 import type { SocketStatus } from "../socket";
 import type { Chat, Me } from "../types";
 
+export type SidebarTab = "chats" | "kept";
+
 const STATUS_LABEL: Record<SocketStatus, string> = {
   open: "Live",
   connecting: "Connecting…",
@@ -11,18 +13,25 @@ const STATUS_LABEL: Record<SocketStatus, string> = {
 export function Sidebar(props: {
   me: Me;
   chats: Chat[];
+  kept: Chat[];
+  tab: SidebarTab;
+  onTab: (tab: SidebarTab) => void;
   loading: boolean;
   status: SocketStatus;
   selectedChatId: string | null;
-  unread: Set<string>;
+  unread: Record<string, number>;
   invitesByParent: Record<string, number>;
   titleOf: (chat: Chat) => string;
+  parentTitleOf: (chat: Chat) => string | undefined;
   onOpen: (chatId: string) => void;
   onNewChat: () => void;
   onSettings: () => void;
   onSignOut: () => void;
 }) {
-  const { me, chats } = props;
+  const { me, tab } = props;
+  const list = tab === "chats" ? props.chats : props.kept;
+  const keptUnread = props.kept.reduce((n, c) => n + (props.unread[c.id] ?? 0), 0);
+
   return (
     <aside className="sidebar">
       <header className="sidebar-head">
@@ -49,22 +58,38 @@ export function Sidebar(props: {
         + New chat
       </button>
 
-      <nav className="chat-list" aria-label="Chats">
-        {props.loading && chats.length === 0 && <p className="muted pad">Loading chats…</p>}
-        {!props.loading && chats.length === 0 && (
+      <div className="tabs" role="tablist" aria-label="Lists">
+        <button role="tab" aria-selected={tab === "chats"} onClick={() => props.onTab("chats")}>
+          Chats
+        </button>
+        <button role="tab" aria-selected={tab === "kept"} onClick={() => props.onTab("kept")}>
+          Kept breakouts
+          {props.kept.length > 0 && <span className="tab-count">{keptUnread > 0 ? keptUnread : props.kept.length}</span>}
+        </button>
+      </div>
+
+      <nav className="chat-list" aria-label={tab === "chats" ? "Chats" : "Kept breakouts"}>
+        {props.loading && list.length === 0 && <p className="muted pad">Loading…</p>}
+        {!props.loading && list.length === 0 && tab === "chats" && (
           <p className="muted pad">No chats yet. Start one with someone who has signed up.</p>
         )}
-        {chats.map((chat) => {
+        {!props.loading && list.length === 0 && tab === "kept" && (
+          <p className="muted pad">
+            Breakouts that someone chose to keep end up here. Nothing yet.
+          </p>
+        )}
+        {list.map((chat) => {
           const title = props.titleOf(chat);
           const invites = props.invitesByParent[chat.id] ?? 0;
-          const isUnread = props.unread.has(chat.id);
+          const unread = props.unread[chat.id] ?? 0;
+          const parent = tab === "kept" ? props.parentTitleOf(chat) : undefined;
           return (
             <button
               key={chat.id}
-              className={`chat-row ${props.selectedChatId === chat.id ? "selected" : ""} ${isUnread ? "unread" : ""}`}
+              className={`chat-row ${props.selectedChatId === chat.id ? "selected" : ""} ${unread > 0 ? "unread" : ""}`}
               onClick={() => props.onOpen(chat.id)}
             >
-              <span className="avatar" aria-hidden>
+              <span className={`avatar ${tab === "kept" ? "kept" : ""}`} aria-hidden>
                 {chat.kind === "group" ? "#" : initials(title)}
               </span>
               <span className="chat-row-text">
@@ -72,14 +97,19 @@ export function Sidebar(props: {
                   <span className="chat-row-title">{title}</span>
                   <span className="chat-row-time">{shortTime(chat.lastMessageAt ?? chat.createdAt)}</span>
                 </span>
+                {parent && <span className="chat-row-from">from {parent}</span>}
                 <span className="chat-row-preview">{chat.lastMessagePreview ?? "No messages yet"}</span>
               </span>
               {invites > 0 && (
                 <span className="badge volatile" title="You were invited to a breakout here">
-                  🔥 {invites}
+                  {invites} live
                 </span>
               )}
-              {isUnread && invites === 0 && <span className="dot" aria-label="Unread" />}
+              {unread > 0 && (
+                <span className="count-badge" aria-label={`${unread} unread`}>
+                  {unread > 99 ? "99+" : unread}
+                </span>
+              )}
             </button>
           );
         })}

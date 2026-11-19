@@ -30,12 +30,7 @@ export function AuthScreen({ onSignedIn }: { onSignedIn: (token: string, me: Me)
   return (
     <main className="auth">
       <form className="auth-card" onSubmit={submit}>
-        <div className="brand">
-          <span className="brand-mark" aria-hidden>
-            🔥
-          </span>
-          <h1>Ember</h1>
-        </div>
+        <h1 className="brand">Ember</h1>
         <p className="muted">Chats, plus breakout side conversations that clear themselves unless someone keeps them.</p>
 
         <div className="segmented" role="tablist">

@@ -3,7 +3,17 @@ import { api } from "../api";
 import type { Me } from "../types";
 import { Dialog } from "./Dialog";
 
-export function SettingsDialog({ me, onClose, onSaved }: { me: Me; onClose: () => void; onSaved: (me: Me) => void }) {
+export function SettingsDialog({
+  me,
+  onClose,
+  onSaved,
+  onSignedOutEverywhere,
+}: {
+  me: Me;
+  onClose: () => void;
+  onSaved: (me: Me) => void;
+  onSignedOutEverywhere: () => void;
+}) {
   const [displayName, setDisplayName] = useState(me.displayName);
   const [statusMessage, setStatusMessage] = useState(me.statusMessage ?? "");
   const [tombstones, setTombstones] = useState(me.tombstoneLoggingEnabled);
@@ -25,6 +35,18 @@ export function SettingsDialog({ me, onClose, onSaved }: { me: Me; onClose: () =
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save");
     } finally {
+      setBusy(false);
+    }
+  }
+
+  async function signOutEverywhere() {
+    if (!window.confirm("Sign out on every device, including this one?")) return;
+    setBusy(true);
+    try {
+      await api.logoutEverywhere();
+      onSignedOutEverywhere();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not sign out everywhere");
       setBusy(false);
     }
   }
@@ -54,13 +76,18 @@ export function SettingsDialog({ me, onClose, onSaved }: { me: Me; onClose: () =
             {error}
           </p>
         )}
-        <div className="row-end">
-          <button type="button" className="ghost" onClick={onClose}>
-            Cancel
+        <div className="row-between">
+          <button type="button" className="ghost danger" onClick={signOutEverywhere} disabled={busy}>
+            Sign out everywhere
           </button>
-          <button type="submit" className="primary" disabled={busy}>
-            Save
-          </button>
+          <div className="row-end">
+            <button type="button" className="ghost" onClick={onClose}>
+              Cancel
+            </button>
+            <button type="submit" className="primary" disabled={busy}>
+              Save
+            </button>
+          </div>
         </div>
       </form>
     </Dialog>

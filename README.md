@@ -1,11 +1,12 @@
 # Ember
 
-A chat app built around one idea: **breakout chats**. Inside any chat you
-can pull a few of the people into a side conversation. That conversation is
-never written to a database. It lives in the server's memory while people
-are in it, and it clears itself once everyone has left, after a 15 second
-"about to be cleared" countdown. If anyone taps **Keep**, it turns into a
-normal saved chat, listed as a thread under the chat it came from.
+A chat app built around one idea: **breakout chats**. Inside any group you
+can pull a few of the people into a side conversation, and only they know
+it exists. That conversation is never written to a database. It lives in
+the server's memory while people are in it, and it clears itself once
+everyone has left, after a 15 second "about to be cleared" countdown.
+Anyone can ask to **keep** it; the others get 15 seconds to decline, and if
+nobody does it becomes a normal saved chat under **Kept breakouts**.
 
 Think "let's take this offline" without spawning yet another permanent
 group chat.
@@ -14,8 +15,8 @@ group chat.
 
 | Folder         | What it is                                                     | Status                                   |
 |----------------|----------------------------------------------------------------|------------------------------------------|
-| `EmberServer/` | Node + TypeScript backend: REST API, WebSocket, SQLite         | Working, 19 automated tests              |
-| `EmberWeb/`    | React + Vite web client                                        | Working: chats, search, breakouts, Keep  |
+| `EmberServer/` | Node + TypeScript backend: REST API, WebSocket, SQLite         | Working, 32 automated tests              |
+| `EmberWeb/`    | React + Vite web client                                        | Working: see the feature list below      |
 | `Ember/`       | SwiftUI iOS app                                                | Frozen (no Mac); kept as design reference |
 
 See [ROADMAP.md](ROADMAP.md) for what's next.
@@ -65,9 +66,21 @@ A login is remembered per browser origin, so use one of these:
 - http://localhost:5173 in one tab and http://127.0.0.1:5173 in another.
 
 Then: sign up as two or three people, create a group from **+ New chat**,
-open it, click **🔥 Start breakout**, and pick someone. They'll see a
-pulsing breakout invite at the top of that chat. Try **End breakout**
-(everyone sees the countdown) and **Keep chat** (it becomes a saved thread).
+open it, click **Start breakout**, and pick someone. They'll see a pulsing
+invite at the top of that chat; the people you left out see nothing. Try
+**End breakout** (everyone sees the countdown) and **Keep chat** (the
+others get Allow / Decline; kept chats land in the **Kept breakouts** tab).
+
+## Features
+
+- Sign up and log in; stays signed in across reloads; sign out everywhere
+- Find people by name or email; DMs and groups
+- Live messages, typing indicators, unread counts, "Seen" receipts
+- Reply, react, edit and delete for everyone (hover a message, click ⋯)
+- Groups: rename, add and remove people, leave; admin passes on automatically
+- Breakouts: invite only, live countdown with the reason, End, keep by vote,
+  typing indicators, and a separate Kept breakouts list
+- Rate limits on logins, search and sending
 
 ## Tests
 
@@ -76,8 +89,9 @@ cd EmberServer
 npm test
 ```
 
-Runs the store unit tests and end to end tests that boot the real server
-and talk to it over HTTP and WebSocket. About 15 seconds.
+Runs the store and rate limiter unit tests, plus end to end tests that
+boot the real server and talk to it over HTTP and WebSocket. About 20
+seconds. GitHub Actions runs these and the web build on every push.
 
 ```bash
 cd EmberWeb
@@ -95,6 +109,8 @@ All in `EmberServer/.env`:
 | `BREAKOUT_DEFAULT_INACTIVITY_SECONDS` | 1800    | No messages for this long starts the countdown                  |
 | `BREAKOUT_EMPTY_GRACE_SECONDS`        | 60      | Nobody viewing for this long starts the countdown               |
 | `BREAKOUT_WARNING_WINDOW_SECONDS`     | 15      | Length of the "about to be cleared" countdown                   |
+| `KEEP_VOTE_SECONDS`                   | 15      | How long others have to decline a keep request                  |
+| `RATE_LIMITS`                         | on      | Set to `off` to disable rate limiting                           |
 | `JWT_SECRET`                          | dev     | Must be a real random value in production or the server refuses |
 
 Lower the first two to watch breakouts clear themselves quickly while

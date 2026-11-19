@@ -37,55 +37,72 @@ only call the repo functions, never raw SQL.
 POST   /auth/register              { email|phone, password, displayName }
 POST   /auth/login                 { email|phone, password }
 GET    /auth/me                    (bearer token)
+POST   /auth/logout-all            sign out everywhere: every token stops working, sockets close
 
 PATCH  /users/me                   { displayName?, statusMessage?, tombstoneLoggingEnabled?, notificationsEnabled?, fcmToken? }
 GET    /users/search?q=<text>      exact email/phone or display-name prefix; profiles only, no contact details
 GET    /users/:id                  public profile (id, displayName, avatarUrl, statusMessage)
 
-GET    /chats                      list chats for the current user
+GET    /chats                      your chats, each with unreadCount, readState, adminIds
 POST   /chats                      { kind: "direct"|"group", title?, participantIds }
                                    400 on unknown user ids; a direct chat that already
                                    exists is returned (200) instead of duplicated
 GET    /chats/:id
+PATCH  /chats/:id                  { title }               rename a group (admins)
+POST   /chats/:id/participants     { userIds }             add people to a group (admins)
+DELETE /chats/:id/participants/:u  remove someone (admins), or leave (yourself)
 GET    /chats/:id/messages         ?before=<ISO date>&limit=<n>
 POST   /chats/:id/messages         { text, replyToMessageId? }
+PATCH  /chats/:id/messages/:m      { text }                edit your own message
+DELETE /chats/:id/messages/:m      delete your own message for everyone
+POST   /chats/:id/messages/:m/reactions  { emoji }         toggle your reaction
+POST   /chats/:id/read             { upToMessageId? }      mark read; others get a `read` event
 POST   /chats/:id/typing           { isTyping }
-POST   /chats/:id/breakout         { participantIds }  -> starts a breakout chat
-GET    /chats/:id/breakouts        { active: [...live breakouts you're in], kept: [...saved breakout threads] }
+POST   /chats/:id/breakout         { participantIds }      start a breakout (groups only)
+GET    /chats/:id/breakouts        { active: [...live breakouts you're in] }
 
+GET    /breakouts/kept             every kept breakout you were in (their own list, not in /chats)
 GET    /breakouts/:id
 GET    /breakouts/:id/messages
-POST   /breakouts/:id/messages     { text }             (REST fallback; prefer WS)
-POST   /breakouts/:id/keep          -> promotes to a persisted chat
-POST   /breakouts/:id/end           -> starts the clearance warning window
+POST   /breakouts/:id/messages     { text }                (REST fallback; prefer WS)
+POST   /breakouts/:id/keep         ask to keep it: 202 while the vote runs, 200 once saved
+POST   /breakouts/:id/keep/respond { allow }               answer someone else's keep request
+POST   /breakouts/:id/end          start the clearance countdown (declines a running keep vote)
 
-POST   /media/presign              stubbed 501 — see src/routes/media.ts
+POST   /media/presign              stubbed 501, see src/routes/media.ts
 GET    /health
 ```
 
 ## WebSocket
 
-Connect to `wss://<host>/ws?token=<JWT from /auth/login>`.
+Connect to `wss://<host>/ws`, then send `{"type":"auth","token":"<JWT>"}`
+as the first message within 5 seconds. The server answers
+`{"type":"ready","userId"}`, or closes with code 4401 if the token is bad
+or the user signed out everywhere. (The token isn't put in the URL because
+URLs end up in proxy and server logs.)
 
-Server -> client events (persisted chats, pushed automatically):
-`{"type":"message", chatId, message}`
+Server -> client events for your chats, pushed automatically:
+`{"type":"message", chatId, message}` (messages have `kind`: `text` or `system`)
+`{"type":"message:updated", chatId, message}` (edited, deleted, reacted)
+`{"type":"read", chatId, userId, lastReadAt}`
 `{"type":"typing", chatId, userId, isTyping}`
-`{"type":"breakout:started", parentChatId, breakout}`
+`{"type":"chat:added", chat}`, `{"type":"chat:updated", chat}`, `{"type":"chat:removed", chatId}`
+`{"type":"breakout:started", parentChatId, breakout}` (only to the invitees)
 `{"type":"breakout:promoted", chatId, parentChatId, chat}`
 `{"type":"breakout:cleared", chatId, parentChatId}` (cleared without being kept)
 
-Kept breakouts never appear in `GET /chats`. Show them as threads under
-their parent chat using `GET /chats/:id/breakouts`.
-
-Client -> server (breakout chats only — persisted chats use the REST
-endpoints above, delivery is server-pushed):
+Client -> server, for breakouts (saved chats use the REST endpoints above):
 `{"type":"breakout:subscribe", chatId}` -> replies with
   `{"type":"breakout:snapshot", chatId, breakout, messages}` then streams
   `{"type":"message", chatId, message}`,
+  `{"type":"typing", chatId, userId, isTyping}`,
   `{"type":"expiryWarning", chatId, secondsRemaining, reason}`,
   `{"type":"warningCancelled", chatId}`,
+  `{"type":"keepRequested", chatId, requestedBy, secondsRemaining, approvedBy}`,
+  `{"type":"keepDeclined", chatId, declinedBy}`, `{"type":"keepFailed", chatId}`,
   `{"type":"purged", chatId}`, `{"type":"promoted", chatId}`
 `{"type":"breakout:send", chatId, text}`
+`{"type":"breakout:typing", chatId, isTyping}`
 `{"type":"breakout:unsubscribe", chatId}`
 `{"type":"ping"}` -> `{"type":"pong"}`
 
@@ -104,9 +121,18 @@ three reasons, and `reason` says which:
 A `breakout:subscribe` counts as viewing the chat. Several connections
 from the same user count as one viewer. If the countdown
 (`BREAKOUT_WARNING_WINDOW_SECONDS`) runs out, the chat is purged from
-memory. Keep Chat writes the chat and its history in a single database
-transaction. If that fails, the chat stays live and the call can be
-retried. Simultaneous Keep taps are safe.
+memory.
+
+**Keeping is a vote.** Keeping saves everyone's words, so when someone
+asks, the others get `KEEP_VOTE_SECONDS` (default 15) to decline. Any
+decline cancels it. Silence counts as yes, and everyone approving saves it
+straight away. A countdown that was running pauses during the vote and
+resumes if it's declined. Saving writes the chat and its whole history in
+one database transaction; if that fails, the chat stays live. Asking while
+a vote is running counts as approving it, so double taps are safe.
+
+**Only invitees know.** Starting a breakout posts nothing in the parent
+chat. Only the people invited get `breakout:started`.
 
 ## Local development
 
@@ -116,8 +142,9 @@ cp .env.example .env        # edit JWT_SECRET at minimum
 npm run dev                 # ts-node-dev, auto-restarts on change
 ```
 
-The SQLite schema (`src/db/schema.sql`) is applied automatically on
-startup — no separate migration command needed for this setup.
+The SQLite schema (`src/db/schema.sql`) and the numbered migrations in
+`src/db/database.ts` are applied automatically on startup, so an existing
+`ember.db` is upgraded in place. There's no separate migration command.
 
 ## Tests
 
@@ -213,7 +240,6 @@ Railway all terminate TLS for you automatically) — the iOS client uses
 - Each server instance keeps live breakouts in its own memory, so a
   restart clears them and running more than one instance needs sticky
   routing by chat id (see the note in `src/services/volatileChatStore.ts`).
-- No rate limiting yet on login, search or message sends.
-- Group chat admin management (add/remove member, role changes) — the
-  data model supports it (`chat_participants.role`) but no endpoints
-  exist yet beyond creation.
+- Rate limits are kept in memory per instance (login and sign up 10 a
+  minute per IP, search 30 a minute, sending 30 per 10 seconds). Set
+  `RATE_LIMITS=off` to disable them, for example in tests.

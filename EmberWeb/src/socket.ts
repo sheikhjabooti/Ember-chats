@@ -18,11 +18,13 @@ export class EmberSocket {
   private ws: WebSocket | null = null;
   private listeners = new Set<(frame: ServerFrame) => void>();
   private statusListeners = new Set<(status: SocketStatus) => void>();
+  private unauthorizedListeners = new Set<() => void>();
   private breakoutSubscriptions = new Map<string, number>();
   private retryDelayMs = 500;
   private retryTimer: number | undefined;
   private pingTimer: number | undefined;
   private stopped = false;
+  private ready = false;
   status: SocketStatus = "connecting";
 
   constructor(
@@ -31,6 +33,7 @@ export class EmberSocket {
   ) {}
 
   connect() {
+    if (this.ws) return;
     this.stopped = false;
     this.open();
   }
@@ -46,6 +49,12 @@ export class EmberSocket {
   on(listener: (frame: ServerFrame) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** Fires when the server rejects the token, e.g. after signing out everywhere. */
+  onUnauthorized(listener: () => void): () => void {
+    this.unauthorizedListeners.add(listener);
+    return () => this.unauthorizedListeners.delete(listener);
   }
 
   onStatus(listener: (status: SocketStatus) => void): () => void {
@@ -74,8 +83,12 @@ export class EmberSocket {
     return this.send({ type: "breakout:send", chatId, text });
   }
 
+  setBreakoutTyping(chatId: string, isTyping: boolean) {
+    this.send({ type: "breakout:typing", chatId, isTyping });
+  }
+
   private send(payload: unknown): boolean {
-    if (this.ws?.readyState !== WebSocket.OPEN) return false;
+    if (!this.ready || this.ws?.readyState !== WebSocket.OPEN) return false;
     this.ws.send(JSON.stringify(payload));
     return true;
   }
@@ -87,34 +100,49 @@ export class EmberSocket {
 
   private open() {
     this.setStatus("connecting");
-    const ws = new WebSocket(`${this.url}?token=${encodeURIComponent(this.token)}`);
+    // The token goes in the first message, not the URL, so it never ends up in logs.
+    const ws = new WebSocket(this.url);
     this.ws = ws;
+    this.ready = false;
 
+    // Every handler first checks that `ws` is still the current socket. A
+    // socket we closed or replaced must go quiet: if its late close event
+    // scheduled a reconnect, we'd end up with two live connections and
+    // every event twice.
     ws.onopen = () => {
-      this.retryDelayMs = 500;
-      this.setStatus("open");
-      for (const chatId of this.breakoutSubscriptions.keys()) {
-        ws.send(JSON.stringify({ type: "breakout:subscribe", chatId }));
-      }
-      window.clearInterval(this.pingTimer);
-      this.pingTimer = window.setInterval(() => this.send({ type: "ping" }), 25_000);
+      if (this.ws !== ws) return ws.close();
+      ws.send(JSON.stringify({ type: "auth", token: this.token }));
     };
 
     ws.onmessage = (event) => {
+      if (this.ws !== ws) return;
       let frame: ServerFrame;
       try {
         frame = JSON.parse(String(event.data));
       } catch {
         return;
       }
+      if (frame.type === "ready") {
+        this.ready = true;
+        this.retryDelayMs = 500;
+        this.setStatus("open");
+        for (const chatId of this.breakoutSubscriptions.keys()) {
+          ws.send(JSON.stringify({ type: "breakout:subscribe", chatId }));
+        }
+        window.clearInterval(this.pingTimer);
+        this.pingTimer = window.setInterval(() => this.send({ type: "ping" }), 25_000);
+      }
       for (const l of this.listeners) l(frame);
     };
 
     ws.onclose = (event) => {
+      if (this.ws !== ws) return;
       window.clearInterval(this.pingTimer);
-      if (this.ws === ws) this.ws = null;
+      this.ready = false;
+      this.ws = null;
       this.setStatus("closed");
       // 4401 means the token was rejected. Retrying won't help.
+      if (event.code === 4401) for (const l of this.unauthorizedListeners) l();
       if (this.stopped || event.code === 4401) return;
       this.retryTimer = window.setTimeout(() => this.open(), this.retryDelayMs);
       this.retryDelayMs = Math.min(this.retryDelayMs * 2, 10_000);
