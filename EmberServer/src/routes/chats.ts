@@ -172,7 +172,9 @@ chatsRouter.post("/:chatId/breakout", requireAuth, async (req: AuthedRequest, re
   const systemMessage = createMessage({
     chatId: parentChat.id,
     senderId: req.userId!,
-    text: `${sender?.display_name ?? "Someone"} started a breakout chat with ${participantIds.length - 1} people.`,
+    text: `${sender?.display_name ?? "Someone"} started a breakout with ${describeInvitees(
+      participantIds.filter((id) => id !== req.userId)
+    )}.`,
   });
   updateChatLastMessage(parentChat.id, systemMessage.text, new Date(systemMessage.sent_at));
 
@@ -197,4 +199,12 @@ function requireMembership(req: AuthedRequest, res: any): ChatRow | null {
     return null;
   }
   return chat;
+}
+
+/** "Bob", "Bob and Carol", "Bob, Carol and Dan", or "5 people" for bigger groups. */
+function describeInvitees(ids: string[]): string {
+  if (ids.length > 3) return `${ids.length} people`;
+  const names = ids.map((id) => findById(id)?.display_name ?? "someone");
+  if (names.length <= 1) return names[0] ?? "nobody";
+  return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }

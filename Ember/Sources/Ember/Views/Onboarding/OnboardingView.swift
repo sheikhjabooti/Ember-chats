@@ -88,7 +88,7 @@ public struct VolatileExplainerSheet: View {
                 .foregroundStyle(.orange)
             Text("About Breakout Chats")
                 .font(.title2.bold())
-            Text("Breakout chats are for quick side conversations. Messages live only on your devices while the chat is open, and are cleared automatically when everyone leaves — unless someone taps \"Keep Chat.\"")
+            Text("Breakout chats are for quick side conversations. Messages are never written to storage. The server holds them in memory only while the chat is open, and they are cleared automatically once everyone leaves, unless someone taps \"Keep Chat.\"")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             Button("Got it", action: onContinue)

@@ -17,7 +17,7 @@ public struct SettingsView: View {
             } header: {
                 Text("Data & Storage")
             } footer: {
-                Text("When on, Ember keeps a record that a breakout chat happened (participants and time) after it's cleared — never the message content. Breakout messages themselves are only ever stored in memory on participants' devices and are discarded when the chat clears, unless someone chooses \"Keep Chat.\"")
+                Text("When on, Ember keeps a record that a breakout chat happened (participants and time) after it's cleared, never the message content. Breakout messages themselves are only ever held in memory (on the server and participants' devices) and are discarded when the chat clears, unless someone chooses \"Keep Chat.\"")
             }
 
             Section("Account") {
